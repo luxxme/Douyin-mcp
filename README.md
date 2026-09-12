@@ -177,7 +177,10 @@ douyin-mcp-server/
 ├── TECHNICAL_REPORT.md       # 技术调研报告
 ├── agent-service/            # 独立 TypeScript 自动回复服务（分阶段开发）
 │   ├── src/mcp/              # MCP Client
-│   ├── src/polling/          # Phase 2 只读扫描
+│   ├── src/polling/          # Phase 2/3 扫描流程
+│   ├── src/processing/       # 最新 incoming 检测
+│   ├── src/store/            # SQLite 与 processed repository
+│   ├── src/utils/            # 稳定 message key
 │   └── tests/                # TypeScript schema 测试
 ├── douyin_mcp/
 │   ├── __init__.py           # 包导出
@@ -208,6 +211,25 @@ npm run phase2
 
 它只列出会话、筛选 unread 候选并打印最近消息，不会调用 LLM 或
 `send_message`。配置说明见 `agent-service/.env.example`。
+
+## Phase 3：SQLite 消息去重
+
+```bash
+cd agent-service
+npm run phase3
+```
+
+Phase 3 会检查所有会话，提取最新的 `friend` 消息，优先用真实消息 ID，
+缺失时使用 conversation、sender、content、timestamp、type 的 SHA-256 指纹。
+SQLite 的唯一约束保证同一会话的同一 message key 只插入一次。
+
+默认数据库：`agent-service/data/douyin-agent.db`。查看记录：
+
+```bash
+npm run processed
+```
+
+该阶段仍然不调用 LLM 或 `send_message`。
 
 ## 关键技术实现
 

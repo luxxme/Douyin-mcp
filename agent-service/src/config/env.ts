@@ -4,11 +4,15 @@ import { z } from "zod";
 const EnvironmentSchema = z.object({
   DOUYIN_MCP_URL: z.url().default("http://127.0.0.1:6789/mcp"),
   PHASE2_MESSAGE_LIMIT: z.coerce.number().int().min(1).max(100).default(20),
+  PHASE3_MESSAGE_LIMIT: z.coerce.number().int().min(1).max(100).default(20),
+  SQLITE_PATH: z.string().min(1).default("./data/douyin-agent.db"),
 });
 
 export type AppConfig = {
   mcpUrl: URL;
   messageLimit: number;
+  phase3MessageLimit: number;
+  sqlitePath: string;
 };
 
 export function loadConfig(
@@ -18,5 +22,7 @@ export function loadConfig(
   return {
     mcpUrl: new URL(parsed.DOUYIN_MCP_URL),
     messageLimit: parsed.PHASE2_MESSAGE_LIMIT,
+    phase3MessageLimit: parsed.PHASE3_MESSAGE_LIMIT,
+    sqlitePath: parsed.SQLITE_PATH,
   };
 }
