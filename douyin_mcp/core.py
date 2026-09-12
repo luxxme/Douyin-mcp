@@ -82,11 +82,11 @@ class DouyinController:
 
         抖音当前的 ``/messages`` 路由会返回 404，私信入口实际是首页导航中
         的“消息”按钮。侧栏节点即使关闭时也可能留在 DOM 中，因此必须检查
-        可见性，不能只检查节点是否存在。
+        可见性，不能只检查节点是否存在。已经打开的聊天层会被保留，因为
+        会话列表 DOM 仍可读取，关闭后重开会造成轮询期间的页面闪烁。
         """
         panel = self.page.locator(".conversationConversationListwrapper")
         if await panel.count() and await panel.first.is_visible():
-            await self._return_to_conversation_list()
             return
 
         for attempt in range(3):
@@ -504,6 +504,12 @@ class DouyinController:
 
         # 尝试点击 — 用昵称文本定位
         nickname = target.nickname
+        if await self._is_conversation_open(nickname):
+            await self.page.locator(".messageMessageListwrapper").wait_for(
+                state="visible", timeout=10000
+            )
+            return target
+
         try:
             items = self.page.locator(".conversationConversationItemwrapper")
             for index in range(await items.count()):
@@ -527,6 +533,37 @@ class DouyinController:
             logger.warning("点击联系人失败: %s", exc)
 
         return None
+
+    async def _is_conversation_open(self, nickname: str) -> bool:
+        """通过聊天标题确认目标会话是否已经打开。"""
+        chat_layers = self.page.locator('[data-stack-layer="chat"]:visible')
+        if not await chat_layers.count():
+            return False
+
+        chat_layer = chat_layers.last
+        candidates = [
+            chat_layer.locator(".StackLayoutStackTitleBartitle").first,
+            chat_layer.locator("[class*='StackTitleBartitle']").first,
+            chat_layer.locator("[class*='StackTitleBarcenterArea']").first,
+            chat_layer.locator("[class*='StackTitleBarcenter']").first,
+        ]
+
+        left_area = chat_layer.locator(".StackLayoutStackTitleBarleftArea").first
+        if await left_area.count():
+            candidates.append(left_area.locator("xpath=..").first)
+
+        for candidate in candidates:
+            try:
+                if not await candidate.count() or not await candidate.is_visible():
+                    continue
+                text = await self._safe_text(candidate)
+                if any(line.strip() == nickname for line in text.splitlines()):
+                    return True
+            except Exception:
+                # React 重新渲染标题栏时 locator 可能瞬时失效；此时回退到
+                # 精确匹配会话项并点击，不能因为优化路径影响正常读取。
+                continue
+        return False
 
     async def _extract_messages(self, limit: int = 20) -> list[DouyinMessage]:
         """从聊天区域提取消息，并按从旧到新的顺序返回。

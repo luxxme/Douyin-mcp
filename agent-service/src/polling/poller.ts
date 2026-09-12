@@ -4,6 +4,7 @@ import { isLoginExpiredError } from "./phase5.js";
 import type { ProcessedMessageRepository } from "../store/processedMessageRepository.js";
 import type { Conversation, ReadMessagesResult } from "../types/douyin.js";
 import { createMessageKey } from "../utils/messageKey.js";
+import { ConversationActivityTracker } from "./conversationActivity.js";
 import type { MessageDebounceTracker } from "./debounce.js";
 
 export type PollingDouyinClient = {
@@ -35,6 +36,7 @@ export type AutoReplyGraphRunner = {
 export type PollCycleSummary = {
   conversations: number;
   policySkipped: number;
+  activitySkipped: number;
   noIncoming: number;
   alreadyProcessed: number;
   debounceWaiting: number;
@@ -57,10 +59,12 @@ export async function runPollCycle(
   debounce: MessageDebounceTracker,
   messageLimit: number,
   nowMs = Date.now(),
+  activityTracker?: ConversationActivityTracker,
 ): Promise<PollCycleSummary> {
   const summary: PollCycleSummary = {
     conversations: 0,
     policySkipped: 0,
+    activitySkipped: 0,
     noIncoming: 0,
     alreadyProcessed: 0,
     debounceWaiting: 0,
@@ -99,8 +103,20 @@ export async function runPollCycle(
       continue;
     }
 
+    if (
+      activityTracker &&
+      !activityTracker.shouldInspect(
+        conversation,
+        debounce.has(conversation.conversation_id),
+      )
+    ) {
+      summary.activitySkipped += 1;
+      continue;
+    }
+
     try {
       const result = await client.readMessages(conversation.nickname, messageLimit);
+      activityTracker?.markOpened(conversation.conversation_id);
       const incoming = findLatestIncomingMessage(result.messages);
       if (!incoming) {
         summary.noIncoming += 1;
@@ -216,8 +232,11 @@ export async function runAutoReplyLoop(options: {
   pollIntervalMs: number;
   signal: AbortSignal;
   maxCycles?: number;
+  activityTracker?: ConversationActivityTracker;
 }): Promise<void> {
   let cycle = 0;
+  const activityTracker =
+    options.activityTracker ?? new ConversationActivityTracker();
   while (!options.signal.aborted) {
     cycle += 1;
     console.log(`[poll start] cycle=${cycle}`);
@@ -229,6 +248,8 @@ export async function runAutoReplyLoop(options: {
         options.graph,
         options.debounce,
         options.messageLimit,
+        Date.now(),
+        activityTracker,
       );
       console.log("[poll complete]", summary);
       if (summary.loginExpired) return;

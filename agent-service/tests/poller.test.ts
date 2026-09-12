@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { AutoReplyGraphRunner } from "../src/polling/poller.js";
+import { ConversationActivityTracker } from "../src/polling/conversationActivity.js";
 import { MessageDebounceTracker } from "../src/polling/debounce.js";
 import { runPollCycle, sleepWithSignal } from "../src/polling/poller.js";
 import { ContactPolicy } from "../src/policy/contactPolicy.js";
@@ -188,4 +189,90 @@ test("abort signal ends polling sleep immediately", async () => {
   controller.abort();
   await sleeping;
   assert.ok(Date.now() - startedAt < 1_000);
+});
+
+test("polling skips unchanged inactive allowlisted conversations", async () => {
+  const database = openAgentDatabase(":memory:");
+  const restoreLogs = muteLogs();
+  const conversations = [
+    { ...conversation, unread: false, unread_count: 0 },
+    {
+      ...conversation,
+      conversation_id: "conversation-2",
+      user_id: "user-2",
+      nickname: "好友二",
+      unread: false,
+      unread_count: 0,
+    },
+    {
+      ...conversation,
+      conversation_id: "conversation-3",
+      user_id: "user-3",
+      nickname: "好友三",
+      unread: false,
+      unread_count: 0,
+    },
+  ];
+  let reads = 0;
+
+  try {
+    const repository = new ProcessedMessageRepository(database);
+    const client = {
+      async listConversations() {
+        return conversations;
+      },
+      async readMessages(contact: string) {
+        reads += 1;
+        const current = conversations.find((item) => item.nickname === contact)!;
+        return {
+          conversation_id: current.conversation_id,
+          user_id: current.user_id,
+          nickname: current.nickname,
+          messages: [],
+          count: 0,
+        };
+      },
+    };
+    const graph: AutoReplyGraphRunner = {
+      async invoke() {
+        throw new Error("graph should not run without incoming messages");
+      },
+    };
+    const debounce = new MessageDebounceTracker(5_000);
+    const policy = new ContactPolicy(
+      conversations.map((item) => item.nickname),
+      [],
+      false,
+    );
+    const activity = new ConversationActivityTracker();
+
+    const baseline = await runPollCycle(
+      client,
+      repository,
+      policy,
+      graph,
+      debounce,
+      20,
+      0,
+      activity,
+    );
+    const unchanged = await runPollCycle(
+      client,
+      repository,
+      policy,
+      graph,
+      debounce,
+      20,
+      10_000,
+      activity,
+    );
+
+    assert.equal(baseline.noIncoming, 3);
+    assert.equal(unchanged.activitySkipped, 2);
+    assert.equal(unchanged.noIncoming, 1);
+    assert.equal(reads, 4);
+  } finally {
+    restoreLogs();
+    database.close();
+  }
 });

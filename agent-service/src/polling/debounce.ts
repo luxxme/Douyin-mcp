@@ -28,6 +28,10 @@ export class MessageDebounceTracker {
     this.pending.delete(conversationId);
   }
 
+  has(conversationId: string): boolean {
+    return this.pending.has(conversationId);
+  }
+
   nextDelay(nowMs: number, fallbackMs: number): number {
     let delay = fallbackMs;
     for (const pending of this.pending.values()) {
