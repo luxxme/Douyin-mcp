@@ -16,10 +16,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import asynccontextmanager
 import logging
 import os
 import sys
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -108,7 +109,21 @@ def _get_tool_lock() -> asyncio.Lock:
 
 # ── MCP server ──────────────────────────────────────────────────────────
 
-mcp = MCPServer("Douyin MCP")
+
+@asynccontextmanager
+async def _server_lifespan(_server: MCPServer) -> AsyncIterator[dict]:
+    """在 MCP 服务退出时可靠释放 Playwright 和浏览器子进程。"""
+    global _ctrl, _tool_lock
+    try:
+        yield {}
+    finally:
+        if _ctrl is not None:
+            await _ctrl.close()
+        _ctrl = None
+        _tool_lock = None
+
+
+mcp = MCPServer("Douyin MCP", lifespan=_server_lifespan)
 
 
 @mcp.custom_route("/health", methods=["GET"])
@@ -255,4 +270,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        logger.info("收到中断信号，服务已停止")

@@ -382,10 +382,22 @@ class BrowserManager:
 
     async def close(self) -> None:
         """清理资源，关闭浏览器。"""
-        if self._page:
-            await self._page.close()
+        async def close_safely(label: str, close_operation) -> None:
+            try:
+                await close_operation()
+            except Exception as exc:
+                # 服务取消时 Playwright driver 可能先断开；清理应保持幂等。
+                logger.debug("关闭 %s 时连接已结束: %s", label, exc)
+
         if self._context:
-            await self._context.close()
+            await close_safely("browser context", self._context.close)
+        if self._browser:
+            await close_safely("browser", self._browser.close)
         if self._playwright:
-            await self._playwright.stop()
+            await close_safely("Playwright", self._playwright.stop)
+
+        self._page = None
+        self._context = None
+        self._browser = None
+        self._playwright = None
         logger.info("浏览器已关闭")

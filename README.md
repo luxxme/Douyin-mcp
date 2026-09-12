@@ -175,6 +175,10 @@ douyin-mcp-server/
 ├── pyproject.toml            # 项目配置
 ├── README.md                 # 本文件
 ├── TECHNICAL_REPORT.md       # 技术调研报告
+├── agent-service/            # 独立 TypeScript 自动回复服务（分阶段开发）
+│   ├── src/mcp/              # MCP Client
+│   ├── src/polling/          # Phase 2 只读扫描
+│   └── tests/                # TypeScript schema 测试
 ├── douyin_mcp/
 │   ├── __init__.py           # 包导出
 │   ├── server.py             # MCP 服务器入口（MCPServer）
@@ -182,8 +186,28 @@ douyin-mcp-server/
 │   ├── models.py             # MCP 结构化返回模型
 │   └── browser.py            # 浏览器管理（扫码登录、持久化）
 └── tests/
-    └── test_controller.py    # 测试（TODO）
+    ├── test_models.py        # 结构化模型测试
+    └── test_server_schema.py # MCP Tool schema 测试
 ```
+
+## Phase 2：只读 MCP Client
+
+先启动 Python MCP：
+
+```bash
+python -m douyin_mcp.server --transport streamable-http --port 6789
+```
+
+再运行独立 TypeScript Client：
+
+```bash
+cd agent-service
+npm install
+npm run phase2
+```
+
+它只列出会话、筛选 unread 候选并打印最近消息，不会调用 LLM 或
+`send_message`。配置说明见 `agent-service/.env.example`。
 
 ## 关键技术实现
 

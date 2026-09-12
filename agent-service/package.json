@@ -1,0 +1,26 @@
+{
+  "name": "douyin-auto-reply-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "TypeScript MCP client for the staged Douyin auto-reply agent",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "phase2": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "dotenv": "17.4.2",
+    "zod": "4.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": ">=20.6.0"
+  }
+}
