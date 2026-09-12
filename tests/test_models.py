@@ -1,5 +1,6 @@
 import unittest
 
+from douyin_mcp.core import DouyinController
 from douyin_mcp.models import (
     Conversation,
     ConversationListResult,
@@ -43,6 +44,38 @@ class StructuredModelsTest(unittest.TestCase):
 
         self.assertEqual(result.messages[0].sender, "friend")
         self.assertEqual(result.messages[0].type, "text")
+
+    def test_current_douyin_direction_flag_is_normalized(self) -> None:
+        self.assertEqual(
+            DouyinController._normalize_message_sender(
+                system=False, is_my_message=True
+            ),
+            "friend",
+        )
+        self.assertEqual(
+            DouyinController._normalize_message_sender(
+                system=False, is_my_message=False
+            ),
+            "me",
+        )
+        self.assertEqual(
+            DouyinController._normalize_message_sender(
+                system=True, is_my_message=True
+            ),
+            "system",
+        )
+        self.assertEqual(
+            DouyinController._normalize_message_sender(
+                system=False, is_my_message=None
+            ),
+            "system",
+        )
+
+    def test_recent_dom_messages_are_returned_oldest_to_newest(self) -> None:
+        self.assertEqual(
+            list(DouyinController._recent_message_dom_indices(8, 3)),
+            [2, 1, 0],
+        )
 
 
 if __name__ == "__main__":

@@ -529,13 +529,18 @@ class DouyinController:
         return None
 
     async def _extract_messages(self, limit: int = 20) -> list[DouyinMessage]:
-        """从聊天区域提取消息，并优先使用网页内部的稳定消息 ID。"""
+        """从聊天区域提取消息，并按从旧到新的顺序返回。
+
+        抖音当前虚拟列表的 DOM 顺序是从新到旧（索引 0 位于视觉底部），
+        因此必须反向遍历最近的节点。Agent Service 约定数组最后一项才是
+        最新消息。
+        """
         limit = max(1, min(limit, 100))
         messages: list[DouyinMessage] = []
         items = self.page.locator(".messageMessageBoxmessageBox")
-        start = max(0, await items.count() - limit)
+        item_count = await items.count()
 
-        for index in range(start, await items.count()):
+        for index in self._recent_message_dom_indices(item_count, limit):
             try:
                 message = await self._extract_message(items.nth(index))
                 if message.content:
@@ -543,7 +548,31 @@ class DouyinController:
             except Exception as exc:
                 logger.warning("解析第 %d 条消息失败: %s", index, exc)
 
-        return messages[-limit:]
+        return messages
+
+    @staticmethod
+    def _recent_message_dom_indices(item_count: int, limit: int) -> range:
+        """返回最近消息的 DOM 索引，顺序为从旧到新。"""
+        recent_count = min(max(item_count, 0), max(limit, 0))
+        return range(recent_count - 1, -1, -1)
+
+    @staticmethod
+    def _normalize_message_sender(
+        *, system: bool, is_my_message: bool | None
+    ) -> str:
+        """把抖音当前网页的内部方向标记转换成 Agent 方向。
+
+        真实 DOM 验证显示：当前桌面网页中 ``isMyMessage=true`` 的气泡位于
+        左侧并带会话对方头像，因此它表示对方发来的消息。字段缺失时返回
+        ``system``，以避免把无法确认方向的消息误判为 incoming。
+        """
+        if system:
+            return "system"
+        if is_my_message is True:
+            return "friend"
+        if is_my_message is False:
+            return "me"
+        return "system"
 
     async def _extract_message(self, item) -> DouyinMessage:
         """把抖音消息节点规范化为自动回复服务需要的数据结构。"""
@@ -589,7 +618,9 @@ class DouyinController:
 
             return {
                 id: messageId,
-                sender: system ? 'system' : (message && message.isMyMessage ? 'me' : 'friend'),
+                system,
+                isMyMessage: message && typeof message.isMyMessage === 'boolean'
+                    ? message.isMyMessage : null,
                 senderName: senderName ? senderName.innerText.trim() : null,
                 content: content.trim(),
                 timestamp: time ? time.innerText.trim() : null,
@@ -597,9 +628,13 @@ class DouyinController:
             };
         }""")
 
+        sender = self._normalize_message_sender(
+            system=data["system"], is_my_message=data["isMyMessage"]
+        )
+
         if not data["id"]:
             fingerprint = "|".join([
-                data["sender"],
+                sender,
                 data["content"],
                 data["timestamp"] or "",
             ])
@@ -607,7 +642,7 @@ class DouyinController:
 
         return DouyinMessage(
             id=data["id"],
-            sender=data["sender"],
+            sender=sender,
             sender_name=data["senderName"],
             content=data["content"],
             timestamp=data["timestamp"] or None,
