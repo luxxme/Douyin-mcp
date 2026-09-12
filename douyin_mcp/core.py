@@ -9,10 +9,10 @@ Douyin MCP Core — 抖音操作核心模块
 
 关键依赖:
   - playwright: 浏览器自动化
-  - 抖音网页版 (https://www.douyin.com/messages)
+  - 抖音网页版首页的消息侧栏
 
 注意:
-  - 聊天输入框使用 Draft.js，通过 page.evaluate() 注入文本
+  - 聊天输入框使用 EditorKit contenteditable，通过 Playwright fill 输入文本
   - 消息读取通过 DOM 提取，零成本
   - 所有操作需要先登录（由 browser.BrowserManager 管理）
 """
@@ -20,61 +20,20 @@ Douyin MCP Core — 抖音操作核心模块
 from __future__ import annotations
 
 import asyncio
-import json
+import hashlib
 import logging
 import re
-import sys
-from pathlib import Path
-from typing import Optional
 
-from douyin_mcp.browser import BrowserManager, MESSAGES_URL, DOUYIN_URL
+from douyin_mcp.browser import BrowserManager, DOUYIN_URL
+from douyin_mcp.models import (
+    Conversation,
+    ConversationListResult,
+    DouyinMessage,
+    ReadMessagesResult,
+    SendMessageResult,
+)
 
 logger = logging.getLogger("douyin-mcp.core")
-
-# ── Draft.js 文本注入脚本 ────────────────────────────────────────────
-#
-# 抖音聊天输入框基于 Draft.js，不能直接用 fill() 或 type()。
-# 通过模拟 ClipboardEvent('paste') 触发 Draft.js 的 onChange 回调。
-#
-# 参考: https://blog.csdn.net/qq_28821897/article/details/154570263
-
-DRAFTJS_PASTE_SCRIPT = """text => {
-    // 找到 Draft.js 编辑器的可编辑区域
-    const editor = document.querySelector('[data-contents="true"]') ||
-                   document.querySelector('.DraftEditor-editor [contenteditable="true"]') ||
-                   document.querySelector('.DraftEditor-root [contenteditable="true"]');
-
-    if (!editor) {
-        // 降级：尝试找任何 contenteditable 元素
-        const fallback = document.querySelector('[contenteditable="true"]');
-        if (!fallback) {
-            return { success: false, error: 'Draft.js editor not found' };
-        }
-        // 尝试直接设置 innerText
-        fallback.innerText = text;
-        // 触发 input 事件
-        fallback.dispatchEvent(new Event('input', { bubbles: true }));
-        return { success: true, method: 'innerText' };
-    }
-
-    // 方案 A: 直接设置 innerText + 触发 input
-    editor.innerText = text;
-    editor.dispatchEvent(new Event('input', { bubbles: true }));
-
-    // 方案 B: 额外触发 paste 事件（兼容 Draft.js）
-    const dt = new DataTransfer();
-    dt.setData('text/plain', text);
-    dt.setData('text/html', text);
-    const pasteEvent = new ClipboardEvent('paste', {
-        clipboardData: dt,
-        bubbles: true,
-        cancelable: true,
-    });
-    editor.dispatchEvent(pasteEvent);
-
-    return { success: true, method: 'paste' };
-}
-"""
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -119,9 +78,57 @@ class DouyinController:
     # ── 工具函数 ────────────────────────────────────────────────────
 
     async def _ensure_messages_page(self) -> None:
-        """确保当前在 /messages 页面。"""
-        if MESSAGES_URL not in self.page.url:
-            await self._browser.navigate(MESSAGES_URL)
+        """确保抖音首页的私信侧栏已打开。
+
+        抖音当前的 ``/messages`` 路由会返回 404，私信入口实际是首页导航中
+        的“消息”按钮。侧栏节点即使关闭时也可能留在 DOM 中，因此必须检查
+        可见性，不能只检查节点是否存在。
+        """
+        panel = self.page.locator(".conversationConversationListwrapper")
+        if await panel.count() and await panel.first.is_visible():
+            await self._return_to_conversation_list()
+            return
+
+        for attempt in range(3):
+            if not self.page.url.startswith(DOUYIN_URL) or attempt:
+                await self._browser.navigate(DOUYIN_URL)
+                await asyncio.sleep(3)
+
+            trigger_groups = [
+                self.page.locator("p.phl13lpd").filter(has_text="消息"),
+                self.page.get_by_text("消息", exact=True),
+            ]
+            for triggers in trigger_groups:
+                for index in range(await triggers.count()):
+                    trigger = triggers.nth(index)
+                    try:
+                        if not await trigger.is_visible():
+                            continue
+                        await trigger.click(timeout=5000)
+                        await panel.first.wait_for(state="visible", timeout=8000)
+                        return
+                    except Exception:
+                        continue
+
+        raise RuntimeError("无法打开抖音私信面板，网页结构可能已变化")
+
+    async def _return_to_conversation_list(self) -> None:
+        """如果聊天详情层已打开，则点击其返回箭头回到会话列表。"""
+        chat_layers = self.page.locator('[data-stack-layer="chat"]:visible')
+        if not await chat_layers.count():
+            return
+        chat_layer = chat_layers.last
+
+        back = chat_layer.locator(".StackLayoutStackTitleBarleftArea").first
+        if not await back.count() or not await back.is_visible():
+            raise RuntimeError("聊天详情已打开，但没有找到返回会话列表的按钮")
+
+        await back.click()
+        try:
+            await chat_layer.wait_for(state="hidden", timeout=5000)
+        except Exception:
+            # 部分版本会保留覆盖层节点；只要它不再阻挡会话项即可继续。
+            logger.debug("聊天覆盖层在返回后仍保留在 DOM")
 
     async def _safe_text(self, element_handle, default: str = "") -> str:
         """安全地获取元素文本内容。"""
@@ -357,178 +364,95 @@ class DouyinController:
     #  Tool 2: list_conversations
     # ══════════════════════════════════════════════════════════════════
 
-    async def list_conversations(self) -> str:
+    async def list_conversations(self) -> ConversationListResult:
         """列举当前所有的私信会话列表。
 
         从 /messages 页面左侧会话面板提取会话信息。
 
         Returns:
-            会话列表文本（用户名、最后消息、未读数等）。
+            结构化会话列表（联系人、最后消息、未读状态等）。
         """
         await self._ensure_messages_page()
         await asyncio.sleep(3)  # 等待左侧列表渲染
 
         conversations = await self._extract_conversations()
 
-        if not conversations:
-            return "没有找到会话（可能是没有私信历史，或页面结构变化）"
+        return ConversationListResult(
+            conversations=conversations,
+            count=len(conversations),
+        )
 
-        output = [f"会话列表 ({len(conversations)}):\n"]
-        for i, conv in enumerate(conversations, 1):
-            unread = conv.get("unread", "")
-            unread_tag = f" [未读: {unread}]" if unread else ""
-            output.append(
-                f"  {i}. {conv.get('nickname', '?')}{unread_tag}"
-            )
-            if conv.get("last_message"):
-                output.append(f"     最后消息: {conv['last_message'][:80]}")
-            output.append("")
+    async def _extract_conversations(self) -> list[Conversation]:
+        """从已打开的私信侧栏提取结构化会话列表。"""
+        results: list[Conversation] = []
+        items = self.page.locator(".conversationConversationItemwrapper")
 
-        return "\n".join(output).strip()
-
-    async def _extract_conversations(self) -> list[dict]:
-        """从 /messages 页面提取会话列表。"""
-        results = []
-
-        # 尝试多个会话列表容器的选择器
-        container_selectors = [
-            "[class*='conversation-list']",
-            "[class*='message-list']",
-            "[class*='chat-list']",
-            "[class*='session-list']",
-            "div[class*='list']",
-        ]
-
-        container = None
-        for sel in container_selectors:
-            try:
-                container = await self.page.query_selector(sel)
-                if container:
-                    break
-            except Exception:
-                continue
-
-        # 会话项选择器
-        item_selectors = [
-            "[class*='conversation-item']",
-            "[class*='message-item']",
-            "[class*='chat-item']",
-            "[class*='session-item']",
-            "li[class*='item']",
-            "div[class*='item']",
-        ]
-
-        items = []
-        if container:
-            for sel in item_selectors:
-                try:
-                    els = await container.query_selector_all(sel)
-                    if els:
-                        items = els
-                        break
-                except Exception:
-                    continue
-        else:
-            # 降级：从整个页面找
-            for sel in item_selectors:
-                try:
-                    els = await self.page.query_selector_all(sel)
-                    if els:
-                        items = els
-                        break
-                except Exception:
-                    continue
-
-        for item in items:
+        for index in range(await items.count()):
+            item = items.nth(index)
             try:
                 conv = await self._extract_conversation_item(item)
-                if conv.get("nickname"):
+                if conv.nickname:
                     results.append(conv)
-            except Exception:
-                continue
+            except Exception as exc:
+                logger.warning("解析第 %d 个会话失败: %s", index, exc)
 
         return results
 
-    async def _extract_conversation_item(self, item) -> dict:
+    async def _extract_conversation_item(self, item) -> Conversation:
         """从单个会话项提取信息。"""
-        conv = {
-            "nickname": "",
-            "last_message": "",
-            "unread": "",
-            "timestamp": "",
-        }
+        async def child_text(selector: str) -> str:
+            locator = item.locator(selector).first
+            if not await locator.count():
+                return ""
+            return await self._safe_text(locator)
 
-        # 昵称
-        for sel in [
-            "[class*='nickname']",
-            "[class*='name']",
-            "[class*='title']",
-            "span",
-        ]:
-            try:
-                el = await item.query_selector(sel)
-                if el:
-                    text = await self._safe_text(el)
-                    if text and len(text) < 30:
-                        conv["nickname"] = text
-                        break
-            except Exception:
-                continue
+        nickname = await child_text(".conversationConversationItemtitle")
+        last_message = await child_text(".ConversationItemHinttextBox")
+        timestamp = await child_text(".ConversationItemTagNextToTitletimeStr")
 
-        # 最后消息
-        for sel in [
-            "[class*='last-message']",
-            "[class*='lastMessage']",
-            "[class*='content']",
-            "[class*='message']",
-            "p",
-        ]:
-            try:
-                el = await item.query_selector(sel)
-                if el:
-                    text = await self._safe_text(el)
-                    if text and text != conv["nickname"]:
-                        conv["last_message"] = text
-                        break
-            except Exception:
-                continue
+        unread_badge = item.locator(
+            ".ConversationItemUnReadCountmutedUnreadBadge, "
+            "[class*='ConversationItemUnReadCount']"
+        ).first
+        has_unread_badge = bool(await unread_badge.count()) and await unread_badge.is_visible()
+        unread_text = await self._safe_text(unread_badge) if has_unread_badge else ""
+        unread_match = re.search(r"\d+", unread_text)
+        unread_count = int(unread_match.group()) if unread_match else int(has_unread_badge)
 
-        # 未读标记
-        for sel in [
-            "[class*='unread']",
-            "[class*='badge']",
-            "[class*='count']",
-            "span[class*='num']",
-        ]:
-            try:
-                el = await item.query_selector(sel)
-                if el:
-                    conv["unread"] = await self._safe_text(el)
-                    break
-            except Exception:
-                continue
+        user_id = await item.evaluate("""el => {
+            const fiberKey = Object.keys(el).find(key => key.startsWith('__reactFiber'));
+            let fiber = fiberKey ? el[fiberKey] : null;
+            while (fiber) {
+                for (const props of [fiber.pendingProps, fiber.memoizedProps]) {
+                    const conversation = props && props.conversation;
+                    if (conversation && typeof conversation.toParticipantSecUserId === 'string') {
+                        return conversation.toParticipantSecUserId || null;
+                    }
+                }
+                fiber = fiber.return;
+            }
+            return null;
+        }""")
 
-        # 时间戳
-        for sel in [
-            "[class*='time']",
-            "[class*='timestamp']",
-            "time",
-        ]:
-            try:
-                el = await item.query_selector(sel)
-                if el:
-                    conv["timestamp"] = await self._safe_text(el)
-                    break
-            except Exception:
-                continue
+        conversation_id = user_id or hashlib.sha256(
+            f"douyin-conversation:{nickname}".encode("utf-8")
+        ).hexdigest()
 
-        return conv
+        return Conversation(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            nickname=nickname,
+            last_message=last_message,
+            unread=has_unread_badge,
+            unread_count=unread_count,
+            timestamp=timestamp or None,
+        )
 
     # ══════════════════════════════════════════════════════════════════
     #  Tool 3: read_messages
     # ══════════════════════════════════════════════════════════════════
 
-    async def read_messages(self, contact: str, limit: int = 20) -> str:
+    async def read_messages(self, contact: str, limit: int = 20) -> ReadMessagesResult:
         """读取指定联系人的私信消息。
 
         Args:
@@ -536,15 +460,15 @@ class DouyinController:
             limit: 读取的最大消息条数（默认 20）。
 
         Returns:
-            消息列表文本。
+            带稳定消息 ID、发送方向和类型的结构化消息列表。
         """
         await self._ensure_messages_page()
         await asyncio.sleep(2)
 
         # 1. 在会话列表中点击指定联系人
-        opened = await self._open_conversation(contact)
-        if not opened:
-            return f"未找到与「{contact}」的会话"
+        conversation = await self._open_conversation(contact)
+        if conversation is None:
+            raise LookupError(f"未找到与「{contact}」的会话")
 
         # 2. 等待消息区域加载
         await asyncio.sleep(2)
@@ -552,28 +476,24 @@ class DouyinController:
         # 3. 提取消息
         messages = await self._extract_messages(limit)
 
-        if not messages:
-            return f"与「{contact}」的会话中没有找到消息"
+        return ReadMessagesResult(
+            conversation_id=conversation.conversation_id,
+            user_id=conversation.user_id,
+            nickname=conversation.nickname,
+            messages=messages,
+            count=len(messages),
+        )
 
-        output = [f"与「{contact}」的私信 (最近 {len(messages)} 条):\n"]
-        for msg in messages:
-            sender = msg.get("sender", "?")
-            text = msg.get("text", "")
-            time = msg.get("time", "")
-            output.append(f"  [{time}] {sender}: {text}")
-
-        return "\n".join(output)
-
-    async def _open_conversation(self, contact: str) -> bool:
+    async def _open_conversation(self, contact: str) -> Conversation | None:
         """在会话列表中点击指定联系人的会话。
 
         支持精确匹配和模糊匹配。
         """
         conversations = await self._extract_conversations()
 
-        target = None
+        target: Conversation | None = None
         for conv in conversations:
-            name = conv.get("nickname", "")
+            name = conv.nickname
             if contact == name or contact in name or name in contact:
                 target = conv
                 break
@@ -583,176 +503,128 @@ class DouyinController:
             return False
 
         # 尝试点击 — 用昵称文本定位
-        nickname = target["nickname"]
+        nickname = target.nickname
         try:
-            # 方法 1: 用文本定位
-            link = await self.page.query_selector(f"text='{nickname}'")
-            if link:
-                await link.click()
-                return True
-
-            # 方法 2: 包含文本
-            link = await self.page.query_selector(f"text={nickname}")
-            if link:
-                await link.click()
-                return True
-
-            # 方法 3: 用 XPath
-            xpath = f"//*[contains(text(), '{nickname}')]"
-            link = await self.page.wait_for_selector(f"xpath={xpath}", timeout=5000)
-            if link:
-                await link.click()
-                return True
+            items = self.page.locator(".conversationConversationItemwrapper")
+            for index in range(await items.count()):
+                item = items.nth(index)
+                title = item.locator(".conversationConversationItemtitle")
+                if not await title.count():
+                    continue
+                if (await title.inner_text()).strip() == nickname:
+                    try:
+                        await item.click(timeout=5000)
+                    except Exception:
+                        # 打开的聊天层会覆盖会话列表并拦截鼠标动作，但底层
+                        # React 会话项仍存在。精确匹配后用 DOM click 作为降级。
+                        await item.evaluate("el => el.click()")
+                    await self.page.locator(".messageMessageListwrapper").wait_for(
+                        state="visible", timeout=10000
+                    )
+                    return target
 
         except Exception as exc:
             logger.warning("点击联系人失败: %s", exc)
 
-        return False
+        return None
 
-    async def _extract_messages(self, limit: int = 20) -> list[dict]:
-        """从聊天区域提取消息列表。"""
-        messages = []
+    async def _extract_messages(self, limit: int = 20) -> list[DouyinMessage]:
+        """从聊天区域提取消息，并优先使用网页内部的稳定消息 ID。"""
+        limit = max(1, min(limit, 100))
+        messages: list[DouyinMessage] = []
+        items = self.page.locator(".messageMessageBoxmessageBox")
+        start = max(0, await items.count() - limit)
 
-        # 消息容器选择器
-        container_selectors = [
-            "[class*='message-list']",
-            "[class*='chat-area']",
-            "[class*='chat-content']",
-            "[class*='message-area']",
-        ]
-
-        container = None
-        for sel in container_selectors:
+        for index in range(start, await items.count()):
             try:
-                container = await self.page.query_selector(sel)
-                if container:
-                    break
-            except Exception:
-                continue
-
-        # 消息项选择器
-        item_selectors = [
-            "[class*='message-item']",
-            "[class*='MessageItem']",
-            "[class*='chat-message']",
-            "div[class*='message']",
-        ]
-
-        items = []
-        if container:
-            for sel in item_selectors:
-                try:
-                    els = await container.query_selector_all(sel)
-                    if els:
-                        items = els
-                        break
-                except Exception:
-                    continue
-        else:
-            # 降级：从页面找消息元素
-            for sel in item_selectors:
-                try:
-                    els = await self.page.query_selector_all(sel)
-                    if els:
-                        items = els
-                        break
-                except Exception:
-                    continue
-
-        if not items:
-            # 最后的降级：找包含 data-text 的 span
-            try:
-                text_spans = await self.page.query_selector_all(
-                    "span[data-text='true']"
-                )
-                for span in text_spans[-limit:]:
-                    text = await self._safe_text(span)
-                    if text:
-                        messages.append({
-                            "sender": "对方",
-                            "text": text,
-                            "time": "",
-                        })
-                return messages[-limit:]
-            except Exception:
-                pass
-
-            return messages
-
-        for item in items[-limit:]:
-            try:
-                msg = await self._extract_message(item)
-                if msg.get("text"):
-                    messages.append(msg)
-            except Exception:
-                continue
+                message = await self._extract_message(items.nth(index))
+                if message.content:
+                    messages.append(message)
+            except Exception as exc:
+                logger.warning("解析第 %d 条消息失败: %s", index, exc)
 
         return messages[-limit:]
 
-    async def _extract_message(self, item) -> dict:
-        """从单个消息元素提取信息。"""
-        msg = {
-            "sender": "",
-            "text": "",
-            "time": "",
-        }
+    async def _extract_message(self, item) -> DouyinMessage:
+        """把抖音消息节点规范化为自动回复服务需要的数据结构。"""
+        data = await item.evaluate("""el => {
+            const fiberKey = Object.keys(el).find(key => key.startsWith('__reactFiber'));
+            let fiber = fiberKey ? el[fiberKey] : null;
+            let message = null;
+            let messageId = null;
 
-        # 判断发送者：自己还是对方
-        # 抖音中自己的消息通常在右侧，对方在左侧
-        class_attr = ""
-        try:
-            class_attr = await item.get_attribute("class") or ""
-        except Exception:
-            pass
+            while (fiber) {
+                const props = [fiber.pendingProps, fiber.memoizedProps];
+                for (const prop of props) {
+                    if (!message && prop && prop.message && typeof prop.message.isMyMessage === 'boolean') {
+                        message = prop.message;
+                    }
+                    if (!messageId && prop && prop.virtualItem && typeof prop.virtualItem.id === 'string') {
+                        messageId = prop.virtualItem.id;
+                    }
+                }
+                fiber = fiber.return;
+            }
 
-        is_self = "self" in class_attr or "mine" in class_attr or "right" in class_attr
-        msg["sender"] = "我" if is_self else "对方"
+            const parsed = message && message.parsedContent && typeof message.parsedContent === 'object'
+                ? message.parsedContent : {};
+            const active = el.querySelector('.MessageBoxContentactiveClickArea');
+            const fullRow = el.querySelector('.messageMessageBoxfullRowContent');
+            const senderName = el.querySelector('.MessageBoxMessageTitleavatarName');
+            const time = el.querySelector('.MessageBoxTimetimeLayout');
+            const system = el.classList.contains('messageMessageBoxisFullRowCenterMessage');
+            const classText = [...el.querySelectorAll('[class]')]
+                .map(node => typeof node.className === 'string' ? node.className : '').join(' ');
 
-        # 消息文本
-        for sel in [
-            "[class*='content']",
-            "[class*='text']",
-            "span[data-text='true']",
-            "div",
-            "span",
-        ]:
-            try:
-                el = await item.query_selector(sel)
-                if el:
-                    text = await self._safe_text(el)
-                    if text:
-                        msg["text"] = text
-                        break
-            except Exception:
-                continue
+            let type = 'other';
+            if (system) type = 'other';
+            else if (typeof parsed.text === 'string') type = 'text';
+            else if (/MessageItemImage/i.test(classText)) type = 'image';
+            else if (/MessageItemShareAweme|MessageItemVideo/i.test(classText) || parsed.itemId) type = 'video';
 
-        # 时间戳
-        for sel in [
-            "[class*='time']",
-            "[class*='timestamp']",
-            "time",
-        ]:
-            try:
-                el = await item.query_selector(sel)
-                if el:
-                    msg["time"] = await self._safe_text(el)
-                    break
-            except Exception:
-                continue
+            let content = '';
+            if (typeof parsed.text === 'string') content = parsed.text;
+            else if (system && fullRow) content = fullRow.innerText;
+            else if (active) content = active.innerText;
 
-        return msg
+            return {
+                id: messageId,
+                sender: system ? 'system' : (message && message.isMyMessage ? 'me' : 'friend'),
+                senderName: senderName ? senderName.innerText.trim() : null,
+                content: content.trim(),
+                timestamp: time ? time.innerText.trim() : null,
+                type
+            };
+        }""")
+
+        if not data["id"]:
+            fingerprint = "|".join([
+                data["sender"],
+                data["content"],
+                data["timestamp"] or "",
+            ])
+            data["id"] = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()
+
+        return DouyinMessage(
+            id=data["id"],
+            sender=data["sender"],
+            sender_name=data["senderName"],
+            content=data["content"],
+            timestamp=data["timestamp"] or None,
+            type=data["type"],
+        )
 
     # ══════════════════════════════════════════════════════════════════
     #  Tool 4: send_message
     # ══════════════════════════════════════════════════════════════════
 
-    async def send_message(self, user_id: str, text: str) -> str:
+    async def send_message(self, user_id: str, text: str) -> SendMessageResult:
         """向指定用户发送私信。
 
         流程:
-          1. 打开 /messages 页面
+          1. 打开首页私信侧栏
           2. 通过联系人昵称打开会话（或通过搜索用户打开新会话）
-          3. 操作 Draft.js 输入框注入文本
+          3. 操作 EditorKit contenteditable 输入框
           4. 点击发送按钮
 
         Args:
@@ -760,8 +632,13 @@ class DouyinController:
             text: 消息内容。
 
         Returns:
-            发送结果描述。
+            结构化发送结果。
         """
+        if not user_id.strip():
+            raise ValueError("user_id 不能为空")
+        if not text.strip():
+            raise ValueError("text 不能为空")
+
         await self._ensure_messages_page()
         await asyncio.sleep(2)
 
@@ -771,8 +648,19 @@ class DouyinController:
         if not opened:
             # 2. 如果不在会话列表中，尝试搜索用户并发送私信
             logger.info("会话列表未找到 %s，尝试搜索并发送私信", user_id)
-            result = await self._search_and_send(user_id, text)
-            return result
+            detail = await self._search_and_send(user_id, text)
+            if detail.startswith("✅"):
+                status = "sent"
+            elif "已输入" in detail:
+                status = "drafted"
+            else:
+                status = "failed"
+            return SendMessageResult(
+                ok=status == "sent",
+                recipient=user_id,
+                status=status,
+                detail=detail,
+            )
 
         # 3. 等待聊天区域加载
         await asyncio.sleep(2)
@@ -780,18 +668,30 @@ class DouyinController:
         # 4. 在输入框中输入文本
         typed = await self._type_message(text)
         if not typed:
-            return f"向「{user_id}」发送消息失败：无法操作输入框"
+            return SendMessageResult(
+                ok=False,
+                recipient=user_id,
+                status="failed",
+                detail="无法操作输入框",
+            )
 
         # 5. 点击发送按钮
         sent = await self._click_send()
         if not sent:
-            return (
-                f"向「{user_id}」的消息已输入但未能自动发送（输入框内容已设置），"
-                f"请手动点击发送按钮"
+            return SendMessageResult(
+                ok=False,
+                recipient=user_id,
+                status="drafted",
+                detail="消息已输入但未能自动发送，请手动点击发送按钮",
             )
 
         await asyncio.sleep(1)
-        return f"✅ 已向「{user_id}」发送消息: {text[:50]}{'...' if len(text) > 50 else ''}"
+        return SendMessageResult(
+            ok=True,
+            recipient=user_id,
+            status="sent",
+            detail="消息已发送",
+        )
 
     async def _search_and_send(self, user_id: str, text: str) -> str:
         """搜索用户并发送私信的降级方案。"""
@@ -844,9 +744,7 @@ class DouyinController:
         return f"向「{user_id}」发送消息失败"
 
     async def _type_message(self, text: str) -> bool:
-        """在 Draft.js 输入框中输入文本。
-
-        通过 page.evaluate() 注入文本，兼容 Draft.js 编辑器。
+        """在抖音当前的 EditorKit contenteditable 输入框中输入文本。
 
         Args:
             text: 要输入的文本内容。
@@ -855,50 +753,12 @@ class DouyinController:
             True 如果输入成功。
         """
         try:
-            # 先点击输入框，确保焦点
-            input_selectors = [
-                "[data-contents='true']",
-                ".DraftEditor-editor",
-                "[contenteditable='true']",
-                ".DraftEditor-root",
-                "div[class*='input']",
-                "textarea",
-            ]
-
-            clicked = False
-            for sel in input_selectors:
-                try:
-                    el = await self.page.wait_for_selector(sel, timeout=3000)
-                    if el:
-                        await el.click()
-                        await asyncio.sleep(0.5)
-                        clicked = True
-                        break
-                except Exception:
-                    continue
-
-            if not clicked:
-                logger.warning("未找到输入框")
-                return False
-
-            # 注入文本
-            result = await self.page.evaluate(DRAFTJS_PASTE_SCRIPT, text)
-            logger.info("Draft.js 注入结果: %s", result)
-
-            if isinstance(result, dict) and result.get("success"):
-                await asyncio.sleep(0.5)
-                return True
-
-            # 降级方案：逐字符输入（对普通 input/textarea 有效）
-            try:
-                input_el = await self.page.query_selector("textarea, input[type='text']")
-                if input_el:
-                    await input_el.fill(text)
-                    return True
-            except Exception:
-                pass
-
-            return False
+            editor = self.page.locator(
+                ".messageEditorinputArea[contenteditable='true']"
+            ).first
+            await editor.wait_for(state="visible", timeout=5000)
+            await editor.fill(text)
+            return (await editor.inner_text()).strip() == text.strip()
 
         except Exception as exc:
             logger.warning("输入文本失败: %s", exc)
@@ -906,28 +766,15 @@ class DouyinController:
 
     async def _click_send(self) -> bool:
         """点击发送按钮。"""
-        send_selectors = [
-            "button:has-text('发送')",
-            "[class*='send-btn']",
-            "[class*='sendButton']",
-            "[class*='send'] button",
-            "div[class*='send']",
-            "button[type='submit']",
-            "//button[contains(text(), '发送')]",
-        ]
-
-        for sel in send_selectors:
-            try:
-                if sel.startswith("//"):
-                    el = await self.page.wait_for_selector(f"xpath={sel}", timeout=3000)
-                else:
-                    el = await self.page.wait_for_selector(sel, timeout=3000)
-
-                if el:
-                    await el.click()
-                    return True
-            except Exception:
-                continue
+        try:
+            # 当前网页版在输入框右侧放置两个 SVG 操作：表情、发送。
+            # 发送始终是 message input 容器中的最后一个可见 SVG。
+            actions = self.page.locator(".messageMsgInputcontainer svg:visible")
+            if await actions.count() >= 2:
+                await actions.last.click()
+                return True
+        except Exception as exc:
+            logger.warning("点击发送按钮失败: %s", exc)
 
         # 降级：按 Enter 发送
         try:

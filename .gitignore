@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+work/
+
+# Runtime state and sensitive login material
+data/*
+!data/.gitkeep
+logs/*
+!logs/.gitkeep

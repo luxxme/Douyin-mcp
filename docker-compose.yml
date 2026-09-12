@@ -11,7 +11,7 @@
 #   3. 扫码后容器自动保存登录态到 data/storage.json
 #
 # 连接 MCP Host:
-#   mcp-client 通过 http://localhost:6789/mcp 连接 (SSE 模式)
+#   mcp-client 通过 http://localhost:6789/mcp 连接 (Streamable HTTP)
 #   或通过 docker exec -it douyin-mcp 使用 stdio
 # =============================================================================
 
@@ -30,8 +30,8 @@ services:
       - TZ=Asia/Shanghai
       # Docker 容器内强制 headless 模式
       - DOUYIN_HEADLESS=true
-      # SSE 传输模式 (MCP HTTP 协议)
-      - DOUYIN_TRANSPORT=sse
+      # MCP 官方当前推荐的 Streamable HTTP 传输
+      - DOUYIN_TRANSPORT=streamable-http
       - DOUYIN_PORT=6789
     restart: unless-stopped
     # 资源限制

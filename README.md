@@ -8,7 +8,7 @@
 |---|------|----------|----------|
 | 1 | 🔍 搜索用户 | `search_user(keyword)` | 搜索页面 → DOM 提取用户信息 |
 | 2 | 📥 读取私信 | `read_messages(contact, limit)` | DOM 提取消息文本（零成本） |
-| 3 | 📤 发送私信 | `send_message(user_id, text)` | Draft.js JS 注入 + 点击发送 |
+| 3 | 📤 发送私信 | `send_message(user_id, text)` | EditorKit contenteditable 输入 + 点击发送 |
 | 4 | 📋 会话列表 | `list_conversations()` | DOM 提取会话项（昵称、最后消息、未读） |
 
 ## 技术架构
@@ -19,7 +19,7 @@
 ├─────────────────────────────────────┤
 │         Douyin MCP Server            │
 │  ┌─────────┐  ┌───────────────────┐  │
-│  │ server.py │→│  FastMCP 暴露工具  │  │
+│  │ server.py │→│ MCPServer 暴露工具 │  │
 │  ├─────────┤  ├───────────────────┤  │
 │  │ core.py  │→│  DouyinController   │  │
 │  ├─────────┤  ├───────────────────┤  │
@@ -60,8 +60,8 @@ playwright install chromium
 # 方式一：直接运行（stdio 模式，适合本地 MCP Host）
 python -m douyin_mcp.server
 
-# 方式二：SSE 模式（HTTP 端口，适合远程调用）
-python -m douyin_mcp.server --transport sse --port 6789
+# 方式二：Streamable HTTP 模式（适合远程调用）
+python -m douyin_mcp.server --transport streamable-http --port 6789
 
 # 方式三：通过 mcp CLI
 mcp run douyin_mcp/server.py --port 6789
@@ -91,10 +91,9 @@ open ./data/login_qrcode.png
 ### 连接 MCP Host
 
 ```bash
-# 容器运行在 SSE 模式
-# MCP Host 通过 SSE 端点连接:
-#   http://localhost:6789/sse   (SSE 事件流)
-#   http://localhost:6789/mcp   (MCP 消息端点)
+# 容器运行在 Streamable HTTP 模式
+# MCP Host 通过以下端点连接:
+#   http://localhost:6789/mcp   (MCP 端点)
 #   http://localhost:6789/health (健康检查)
 
 # 测试健康状态
@@ -116,7 +115,7 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - DOUYIN_HEADLESS=true            # Docker 强制 headless
-      - DOUYIN_TRANSPORT=sse            # SSE 传输模式
+      - DOUYIN_TRANSPORT=streamable-http # 当前推荐的 HTTP 传输
       - DOUYIN_PORT=6789                # 监听端口
     restart: unless-stopped
 ```
@@ -156,16 +155,17 @@ docker compose build --no-cache && docker compose up -d
 - 返回用户昵称、抖音号、简介、粉丝数
 
 **list_conversations()** — 列举私信会话
-- 提取 `/messages` 页面的会话列表
-- 返回每个会话的昵称、最后消息、未读标记
+- 打开首页右侧消息面板（当前 `/messages` 路由已失效）
+- 结构化返回 `conversation_id`、`user_id`、`nickname`、`last_message`、`unread`、`unread_count`、`timestamp`
 
 **read_messages(contact, limit=20)** — 读取私信
 - 在会话列表中定位联系人
-- 从 DOM 提取消息文本和发送者信息
+- 结构化返回 `id`、`sender`（`me` / `friend` / `system`）、`sender_name`、`content`、`timestamp`、`type`
+- 优先使用网页虚拟列表中的稳定消息 ID；缺失时生成内容指纹
 
 **send_message(user_id, text)** — 发送私信
 - 在会话列表查找用户
-- 通过 Draft.js JS 注入输入文本
+- 通过 Playwright 操作 EditorKit contenteditable 输入框
 - 点击发送按钮完成发送
 
 ## 项目结构
@@ -177,8 +177,9 @@ douyin-mcp-server/
 ├── TECHNICAL_REPORT.md       # 技术调研报告
 ├── douyin_mcp/
 │   ├── __init__.py           # 包导出
-│   ├── server.py             # MCP 服务器入口（FastMCP）
+│   ├── server.py             # MCP 服务器入口（MCPServer）
 │   ├── core.py               # 核心操作（DouyinController）
+│   ├── models.py             # MCP 结构化返回模型
 │   └── browser.py            # 浏览器管理（扫码登录、持久化）
 └── tests/
     └── test_controller.py    # 测试（TODO）
@@ -186,10 +187,10 @@ douyin-mcp-server/
 
 ## 关键技术实现
 
-### Draft.js 输入
+### 消息输入框
 
-抖音聊天输入框基于 Draft.js，不能使用标准 `fill()` 或 `type()`。
-通过 `page.evaluate()` 注入 `ClipboardEvent('paste')` 事件触发 Draft.js 的 onChange 回调。
+当前抖音网页私信使用 EditorKit contenteditable 输入框。项目通过精确选择器和
+Playwright `fill()` 输入文本；发送按钮限定在当前消息输入容器内。
 
 ### 登录持久化
 
@@ -208,7 +209,7 @@ douyin-mcp-server/
 | 自动化对象 | macOS 微信客户端 | 抖音网页版 (Web SPA) |
 | 自动化方式 | cua-driver + osascript + screencapture | Playwright 浏览器控制 |
 | 消息读取 | 截图 → Qwen-VL OCR | DOM 提取（更可靠、零成本） |
-| 消息发送 | 剪贴板 + Cmd+V | Draft.js JS 注入 |
+| 消息发送 | 剪贴板 + Cmd+V | EditorKit contenteditable 输入 |
 | 登录方式 | 用户手动登录微信 | Playwright 扫码 + storage_state |
 
 ## 开发

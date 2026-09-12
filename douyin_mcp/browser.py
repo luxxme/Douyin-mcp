@@ -18,7 +18,6 @@ import asyncio
 import logging
 import os
 import sys
-import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -37,7 +36,6 @@ logger = logging.getLogger("douyin-mcp.browser")
 DATA_DIR = Path.home() / ".douyin_mcp"
 STORAGE_STATE_PATH = DATA_DIR / "storage.json"
 DOUYIN_URL = "https://www.douyin.com"
-MESSAGES_URL = "https://www.douyin.com/messages"
 QR_TIMEOUT = 120  # 等待扫码超时（秒）
 
 # ── 反检测脚本 — 修改浏览器指纹绕过抖音反爬 ──────────────────────────
@@ -144,98 +142,65 @@ class BrowserManager:
         if self._headless:
             launch_args.append("--headless=new")
 
-        # ── 使用系统已安装的 Google Chrome ────────────────────────────
-        # 优先通过 channel="chrome" 调用系统 Chrome，避免从网络下载 Chromium
-        
-        # 如果设置了 PLAYWRIGHT_CHROMIUM_PATH 环境变量，优先使用
+        # ── 启动浏览器 ────────────────────────────────────────────────
+        # 优先使用显式路径，其次使用系统 Chrome，最后回退到 Playwright Chromium。
         chromium_path = os.environ.get("PLAYWRIGHT_CHROMIUM_PATH", "")
-        user_data_dir = tempfile.mkdtemp(prefix="douyin_mcp_")
 
         if chromium_path:
             try:
-                self._context = await self._playwright.chromium.launch_persistent_context(
-                    user_data_dir=user_data_dir,
+                self._browser = await self._playwright.chromium.launch(
                     executable_path=chromium_path,
                     headless=self._headless,
                     args=launch_args,
-                    viewport={"width": 1280, "height": 720},
-                    user_agent=(
-                        "Mozilla/5.0 (X11; Linux x86_64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/120.0.0.0 Safari/537.36"
-                    ),
-                    locale="zh-CN",
-                    timezone_id="Asia/Shanghai",
                 )
                 logger.info("通过 PLAYWRIGHT_CHROMIUM_PATH=%s 启动 Chromium", chromium_path)
             except Exception as exc:
                 logger.warning("PLAYWRIGHT_CHROMIUM_PATH 启动失败: %s", exc)
-                chromium_path = ""  # 清空，走后续回退
 
-        if not chromium_path:
+        if self._browser is None:
             try:
-                self._context = await self._playwright.chromium.launch_persistent_context(
-                    user_data_dir=user_data_dir,
+                self._browser = await self._playwright.chromium.launch(
                     channel="chrome",
-                    headless=False,
+                    headless=self._headless,
                     args=launch_args,
-                    viewport={"width": 1280, "height": 720},
-                    user_agent=(
-                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/125.0.0.0 Safari/537.36"
-                    ),
-                    locale="zh-CN",
-                    timezone_id="Asia/Shanghai",
                 )
                 logger.info("通过 channel='chrome' 成功启动系统 Google Chrome")
             except Exception as exc:
-                logger.warning(
-                    "channel='chrome' 启动失败，尝试 executable_path 回退: %s", exc
-                )
-                for fallback_path in [
-                        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-                        None,  # Playwright bundled Chromium
-                    ]:
-                    try:
-                        kwargs = dict(
-                            user_data_dir=user_data_dir,
-                            headless=self._headless,
-                            args=launch_args,
-                            viewport={"width": 1280, "height": 720},
-                            locale="zh-CN",
-                            timezone_id="Asia/Shanghai",
-                        )
-                        if fallback_path:
-                            kwargs["executable_path"] = fallback_path
-                            ua = (
-                                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                "Chrome/125.0.0.0 Safari/537.36"
-                            )
-                        else:
-                            # Docker 容器内 Playwright 自带 Chromium
-                            ua = (
-                                "Mozilla/5.0 (X11; Linux x86_64) "
-                                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                "Chrome/120.0.0.0 Safari/537.36"
-                            )
-                            kwargs["headless"] = True
-                            kwargs["no_viewport"] = False
-                        kwargs["user_agent"] = ua
-                        self._context = await self._playwright.chromium.launch_persistent_context(
-                            **kwargs
-                        )
-                        label = fallback_path if fallback_path else "Playwright bundled Chromium (Docker)"
-                        logger.info("通过 %s 成功启动浏览器", label)
-                        break
-                    except Exception as exc2:
-                        logger.warning("回退路径 %s 失败: %s", fallback_path or "bundled Chromium", exc2)
-                        continue
-            else:
-                raise RuntimeError("所有浏览器启动方式均失败")
+                logger.warning("channel='chrome' 启动失败，尝试 Playwright Chromium: %s", exc)
 
-        self._browser = self._context.browser
+        if self._browser is None:
+            try:
+                self._browser = await self._playwright.chromium.launch(
+                    headless=self._headless,
+                    args=launch_args,
+                )
+                logger.info("通过 Playwright bundled Chromium 成功启动浏览器")
+            except Exception as exc:
+                raise RuntimeError("所有浏览器启动方式均失败") from exc
+
+        context_options = {
+            "viewport": {"width": 1280, "height": 720},
+            "user_agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/125.0.0.0 Safari/537.36"
+            ),
+            "locale": "zh-CN",
+            "timezone_id": "Asia/Shanghai",
+        }
+
+        # 使用 Playwright 原生 storage_state 恢复 cookies 和 localStorage。
+        if self.is_authenticated:
+            context_options["storage_state"] = str(STORAGE_STATE_PATH)
+
+        try:
+            self._context = await self._browser.new_context(**context_options)
+        except Exception as exc:
+            if "storage_state" not in context_options:
+                raise
+            logger.warning("storage_state 恢复失败，将重新登录: %s", exc)
+            context_options.pop("storage_state")
+            self._context = await self._browser.new_context(**context_options)
 
         # 注入反检测脚本
         await self._context.add_init_script(STEALTH_SCRIPT)
@@ -244,19 +209,6 @@ class BrowserManager:
 
         # 设置默认超时
         self._page.set_default_timeout(30000)
-
-        # 恢复登录态 — 从 storage.json 加载 cookies 并注入
-        if self.is_authenticated:
-            try:
-                import json
-                raw = STORAGE_STATE_PATH.read_text()
-                state = json.loads(raw)
-                cookies = state.get("cookies", [])
-                if cookies:
-                    await self._context.add_cookies(cookies)
-                    logger.info("已从 %s 恢复 %d 个 cookies", STORAGE_STATE_PATH, len(cookies))
-            except (json.JSONDecodeError, OSError) as exc:
-                logger.warning("storage_state 读取失败，将重新登录: %s", exc)
 
         logger.info("浏览器启动完成")
 
@@ -291,23 +243,24 @@ class BrowserManager:
         await self._page.goto(DOUYIN_URL, wait_until="domcontentloaded")
         await asyncio.sleep(3)
 
-        # 点击登录按钮 — 尝试多个选择器
-        login_selectors = [
-            "text=登录",
-            ".login-button",
-            "[class*='login']",
-            "button:has-text('登录')",
-            "span:has-text('登录')",
-            "a:has-text('登录')",
+        # 点击页面上可见的登录入口。优先使用语义定位，避免命中隐藏节点。
+        login_locators = [
+            self._page.get_by_role("button", name="登录", exact=True),
+            self._page.get_by_text("登录", exact=True),
+            self._page.locator("button:has-text('登录')"),
+            self._page.locator("a:has-text('登录')"),
+            self._page.locator("[class*='login-button']"),
         ]
         clicked = False
-        for sel in login_selectors:
+        for locator in login_locators:
             try:
-                btn = await self._page.wait_for_selector(sel, timeout=5000)
-                if btn:
+                if await locator.count() > 0:
+                    btn = locator.first
+                    if not await btn.is_visible():
+                        continue
                     await btn.click()
                     clicked = True
-                    logger.info("点击登录按钮: %s", sel)
+                    logger.info("已点击可见的登录按钮")
                     break
             except Exception:
                 continue
@@ -332,8 +285,8 @@ class BrowserManager:
             ]
             for qs in qr_selectors:
                 try:
-                    el = await self._page.wait_for_selector(qs, timeout=8000)
-                    if el:
+                    locator = self._page.locator(qs)
+                    if await locator.count() > 0 and await locator.first.is_visible():
                         qr_detected = True
                         logger.info("二维码元素已找到: %s", qs)
                         break
@@ -388,28 +341,8 @@ class BrowserManager:
                     f"扫码登录超时（{timeout}秒），请重试"
                 )
 
-            current_url = self._page.url
-
-            # 登录成功后可能会跳转回首页
-            if DOUYIN_URL in current_url and "/passport" not in current_url:
-                # 再检查是否有登录态 cookie
-                if await self._check_login_status():
-                    return
-
-            # 检查是否存在用户头像等登录后元素
-            logged_in_selectors = [
-                "[class*='user-info']",
-                "[class*='avatar']",
-                "[class*='userAvatar']",
-                "img[class*='avatar']",
-            ]
-            for sel in logged_in_selectors:
-                try:
-                    el = await self._page.wait_for_selector(sel, timeout=3000)
-                    if el:
-                        return
-                except Exception:
-                    continue
+            if await self._check_login_status():
+                return
 
             await asyncio.sleep(2)
 
