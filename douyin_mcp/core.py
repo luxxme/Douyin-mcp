@@ -510,6 +510,12 @@ class DouyinController:
             )
             return target
 
+        # 另一个聊天覆盖层打开时，底层会话项的 DOM click 可能不会真正切换
+        # 当前会话。必须先回到列表，再执行点击，随后还要核对聊天标题。
+        chat_layers = self.page.locator('[data-stack-layer="chat"]:visible')
+        if await chat_layers.count():
+            await self._return_to_conversation_list()
+
         try:
             items = self.page.locator(".conversationConversationItemwrapper")
             for index in range(await items.count()):
@@ -527,7 +533,12 @@ class DouyinController:
                     await self.page.locator(".messageMessageListwrapper").wait_for(
                         state="visible", timeout=10000
                     )
-                    return target
+                    for _ in range(10):
+                        if await self._is_conversation_open(nickname):
+                            return target
+                        await asyncio.sleep(0.2)
+                    logger.error("聊天标题校验失败，拒绝读取或发送: %s", nickname)
+                    return None
 
         except Exception as exc:
             logger.warning("点击联系人失败: %s", exc)
