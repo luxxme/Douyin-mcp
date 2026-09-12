@@ -32,6 +32,14 @@ export const ReadMessagesResultSchema = z.object({
   count: z.number().int().nonnegative(),
 });
 
+export const SendMessageResultSchema = z.object({
+  ok: z.boolean(),
+  recipient: z.string(),
+  status: z.enum(["sent", "drafted", "failed"]),
+  detail: z.string(),
+});
+
 export type Conversation = z.infer<typeof ConversationSchema>;
 export type DouyinMessage = z.infer<typeof DouyinMessageSchema>;
 export type ReadMessagesResult = z.infer<typeof ReadMessagesResultSchema>;
+export type SendMessageResult = z.infer<typeof SendMessageResultSchema>;

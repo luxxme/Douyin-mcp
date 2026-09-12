@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   ConversationListResultSchema,
   ReadMessagesResultSchema,
+  SendMessageResultSchema,
 } from "../src/types/douyin.js";
 
 test("parses structured conversation output", () => {
@@ -23,6 +24,17 @@ test("parses structured conversation output", () => {
   });
 
   assert.equal(parsed.conversations[0]?.unread, true);
+});
+
+test("parses structured send output", () => {
+  const parsed = SendMessageResultSchema.parse({
+    ok: true,
+    recipient: "好友",
+    status: "sent",
+    detail: "消息已发送",
+  });
+
+  assert.equal(parsed.status, "sent");
 });
 
 test("parses normalized message directions", () => {

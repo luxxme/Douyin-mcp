@@ -6,7 +6,16 @@ export type MarkProcessedInput = {
   conversationId: string;
   messageKey: string;
   message: DouyinMessage;
-  disposition: "phase3_observed" | "phase4_dry_run" | "phase4_skipped";
+  disposition:
+    | "phase3_observed"
+    | "phase4_dry_run"
+    | "phase4_skipped"
+    | "phase5_dry_run"
+    | "phase5_skipped"
+    | "phase5_skipped_rate_limit"
+    | "phase5_sending"
+    | "phase5_sent"
+    | "phase5_send_uncertain";
   processedAt?: string;
   replyContent?: string | null;
 };
@@ -71,6 +80,54 @@ export class ProcessedMessageRepository {
       );
 
     return Number(result.changes) === 1;
+  }
+
+  updateDisposition(
+    conversationId: string,
+    messageKey: string,
+    from: MarkProcessedInput["disposition"],
+    to: MarkProcessedInput["disposition"],
+    processedAt = new Date().toISOString(),
+  ): boolean {
+    const result = this.database
+      .prepare(
+        `UPDATE processed_messages
+         SET disposition = ?, processed_at = ?
+         WHERE conversation_id = ? AND message_key = ? AND disposition = ?`,
+      )
+      .run(to, processedAt, conversationId, messageKey, from);
+    return Number(result.changes) === 1;
+  }
+
+  releaseReservation(conversationId: string, messageKey: string): boolean {
+    const result = this.database
+      .prepare(
+        `DELETE FROM processed_messages
+         WHERE conversation_id = ? AND message_key = ?
+           AND disposition = 'phase5_sending'`,
+      )
+      .run(conversationId, messageKey);
+    return Number(result.changes) === 1;
+  }
+
+  countSendAttemptsSince(since: string, conversationId?: string): number {
+    const dispositions =
+      "('phase5_sending', 'phase5_sent', 'phase5_send_uncertain')";
+    const row = conversationId
+      ? this.database
+          .prepare(
+            `SELECT COUNT(*) AS count FROM processed_messages
+             WHERE processed_at >= ? AND conversation_id = ?
+               AND disposition IN ${dispositions}`,
+          )
+          .get(since, conversationId)
+      : this.database
+          .prepare(
+            `SELECT COUNT(*) AS count FROM processed_messages
+             WHERE processed_at >= ? AND disposition IN ${dispositions}`,
+          )
+          .get(since);
+    return Number((row as { count: number }).count);
   }
 
   count(): number {

@@ -7,8 +7,10 @@ import type { z } from "zod";
 import {
   ConversationListResultSchema,
   ReadMessagesResultSchema,
+  SendMessageResultSchema,
   type Conversation,
   type ReadMessagesResult,
+  type SendMessageResult,
 } from "../types/douyin.js";
 
 export class DouyinClient {
@@ -49,6 +51,14 @@ export class DouyinClient {
       "read_messages",
       { contact, limit },
       ReadMessagesResultSchema,
+    );
+  }
+
+  async sendMessage(contact: string, text: string): Promise<SendMessageResult> {
+    return this.callStructured(
+      "send_message",
+      { user_id: contact, text },
+      SendMessageResultSchema,
     );
   }
 
