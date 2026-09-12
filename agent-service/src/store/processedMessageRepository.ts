@@ -15,7 +15,13 @@ export type MarkProcessedInput = {
     | "phase5_skipped_rate_limit"
     | "phase5_sending"
     | "phase5_sent"
-    | "phase5_send_uncertain";
+    | "phase5_send_uncertain"
+    | "phase6_dry_run"
+    | "phase6_skipped"
+    | "phase6_skipped_rate_limit"
+    | "phase6_sending"
+    | "phase6_sent"
+    | "phase6_send_uncertain";
   processedAt?: string;
   replyContent?: string | null;
 };
@@ -112,7 +118,8 @@ export class ProcessedMessageRepository {
 
   countSendAttemptsSince(since: string, conversationId?: string): number {
     const dispositions =
-      "('phase5_sending', 'phase5_sent', 'phase5_send_uncertain')";
+      "('phase5_sending', 'phase5_sent', 'phase5_send_uncertain', " +
+      "'phase6_sending', 'phase6_sent', 'phase6_send_uncertain')";
     const row = conversationId
       ? this.database
           .prepare(
@@ -128,6 +135,17 @@ export class ProcessedMessageRepository {
           )
           .get(since);
     return Number((row as { count: number }).count);
+  }
+
+  releasePhase6Reservation(conversationId: string, messageKey: string): boolean {
+    const result = this.database
+      .prepare(
+        `DELETE FROM processed_messages
+         WHERE conversation_id = ? AND message_key = ?
+           AND disposition = 'phase6_sending'`,
+      )
+      .run(conversationId, messageKey);
+    return Number(result.changes) === 1;
   }
 
   count(): number {

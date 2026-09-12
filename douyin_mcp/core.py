@@ -558,20 +558,21 @@ class DouyinController:
 
     @staticmethod
     def _normalize_message_sender(
-        *, system: bool, is_my_message: bool | None
+        *, system: bool, is_from_me: bool | None
     ) -> str:
         """把抖音当前网页的内部方向标记转换成 Agent 方向。
 
-        真实 DOM 验证显示：当前桌面网页中 ``isMyMessage=true`` 的气泡位于
-        左侧并带会话对方头像，因此它表示对方发来的消息。字段缺失时返回
-        ``system``，以避免把无法确认方向的消息误判为 incoming。
+        React message 对象中的 ``isMyMessage`` 在双方消息上都可能为 true，
+        不能用于判断方向。真实 DOM 验证显示，我方气泡的 contentBox 包含
+        ``messageMessageBoxisFromMe``，并使用 row-reverse 右侧布局。字段缺失
+        时返回 ``system``，避免把无法确认方向的消息误判为 incoming。
         """
         if system:
             return "system"
-        if is_my_message is True:
-            return "friend"
-        if is_my_message is False:
+        if is_from_me is True:
             return "me"
+        if is_from_me is False:
+            return "friend"
         return "system"
 
     async def _extract_message(self, item) -> DouyinMessage:
@@ -599,6 +600,7 @@ class DouyinController:
                 ? message.parsedContent : {};
             const active = el.querySelector('.MessageBoxContentactiveClickArea');
             const fullRow = el.querySelector('.messageMessageBoxfullRowContent');
+            const contentBox = el.querySelector('.messageMessageBoxcontentBox');
             const senderName = el.querySelector('.MessageBoxMessageTitleavatarName');
             const time = el.querySelector('.MessageBoxTimetimeLayout');
             const system = el.classList.contains('messageMessageBoxisFullRowCenterMessage');
@@ -619,8 +621,8 @@ class DouyinController:
             return {
                 id: messageId,
                 system,
-                isMyMessage: message && typeof message.isMyMessage === 'boolean'
-                    ? message.isMyMessage : null,
+                isFromMe: contentBox
+                    ? contentBox.classList.contains('messageMessageBoxisFromMe') : null,
                 senderName: senderName ? senderName.innerText.trim() : null,
                 content: content.trim(),
                 timestamp: time ? time.innerText.trim() : null,
@@ -629,7 +631,7 @@ class DouyinController:
         }""")
 
         sender = self._normalize_message_sender(
-            system=data["system"], is_my_message=data["isMyMessage"]
+            system=data["system"], is_from_me=data["isFromMe"]
         )
 
         if not data["id"]:

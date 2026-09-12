@@ -45,28 +45,28 @@ class StructuredModelsTest(unittest.TestCase):
         self.assertEqual(result.messages[0].sender, "friend")
         self.assertEqual(result.messages[0].type, "text")
 
-    def test_current_douyin_direction_flag_is_normalized(self) -> None:
+    def test_current_douyin_bubble_direction_is_normalized(self) -> None:
         self.assertEqual(
             DouyinController._normalize_message_sender(
-                system=False, is_my_message=True
-            ),
-            "friend",
-        )
-        self.assertEqual(
-            DouyinController._normalize_message_sender(
-                system=False, is_my_message=False
+                system=False, is_from_me=True
             ),
             "me",
         )
         self.assertEqual(
             DouyinController._normalize_message_sender(
-                system=True, is_my_message=True
+                system=False, is_from_me=False
+            ),
+            "friend",
+        )
+        self.assertEqual(
+            DouyinController._normalize_message_sender(
+                system=True, is_from_me=True
             ),
             "system",
         )
         self.assertEqual(
             DouyinController._normalize_message_sender(
-                system=False, is_my_message=None
+                system=False, is_from_me=None
             ),
             "system",
         )

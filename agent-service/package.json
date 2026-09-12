@@ -5,17 +5,19 @@
   "type": "module",
   "description": "TypeScript MCP client for the staged Douyin auto-reply agent",
   "scripts": {
-    "dev": "tsx src/index.ts",
+    "dev": "tsx src/autoReply.ts",
     "phase2": "tsx src/index.ts",
     "phase3": "tsx src/phase3.ts",
     "phase4": "tsx src/phase4.ts",
     "phase5": "tsx src/phase5.ts",
+    "auto-reply": "tsx src/autoReply.ts",
     "processed": "tsx src/store/inspectProcessed.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts"
   },
   "dependencies": {
     "@langchain/core": "1.2.11",
+    "@langchain/langgraph": "1.4.15",
     "@langchain/openai": "1.5.13",
     "@modelcontextprotocol/client": "2.0.0",
     "dotenv": "17.4.2",

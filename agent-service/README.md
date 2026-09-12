@@ -1,6 +1,6 @@
 # Douyin Auto Reply Agent Service
 
-当前已实现需求文档中的 Phase 2 至 Phase 5：通过 Streamable HTTP 连接 Python Douyin MCP，读取会话，用 SQLite 对最新 incoming 消息做幂等记录，通过 OpenAI-compatible LLM 生成回复，并在显式开启后调用现有 `send_message`。
+当前已实现需求文档中的 Phase 2 至 Phase 6：通过 Streamable HTTP 连接 Python Douyin MCP，持续轮询会话，用 SQLite 对最新 incoming 消息做幂等记录，通过 LangGraph 编排判断、生成和投递，并在显式开启后调用现有 `send_message`。
 
 Phase 4 **永远不会调用 `send_message`**。Phase 5 默认也是 Dry Run，只有严格设置 `AUTO_REPLY_ENABLED=true` 才进入发送分支。
 
@@ -18,8 +18,10 @@ Phase 4 **永远不会调用 `send_message`**。Phase 5 默认也是 Dry Run，�
 cd agent-service
 npm install
 copy .env.example .env
-npm run phase2
+npm run auto-reply
 ```
+
+`npm run dev` 与 `npm run auto-reply` 都会启动 Phase 6 持续服务。默认 `AUTO_REPLY_ENABLED=false`，因此只执行 Dry Run。按 `Ctrl+C` 会中止等待并依次关闭 MCP Client 和 SQLite。
 
 Phase 3 会扫描所有会话（unread 只影响扫描优先级），并把最新 incoming 消息写入 SQLite：
 
@@ -49,6 +51,31 @@ npm run phase5
 
 发送前会先写入 `phase5_sending` 幂等占位。明确发送成功后更新为 `phase5_sent`；明确失败会释放占位供后续重试；结果不确定会更新为 `phase5_send_uncertain` 并禁止自动重试，避免重复发送。
 
+Phase 6 使用 LangGraph 的 `StateSchema`、`StateGraph` 和 conditional edges：
+
+```text
+START
+  ↓
+loadMessages
+  ↓
+detectIncoming
+  ↓
+checkAlreadyProcessed
+  ├─ 已处理 / debounce 期间有新消息 → END
+  ↓
+evaluateShouldReply
+  ├─ 否 → markSkipped → END
+  ↓
+generateReply
+  ↓
+validateReply
+  ├─ 否 → markSkipped → END
+  ↓
+deliverReply → END
+```
+
+轮询默认每 10 秒运行。发现新 incoming 后先进入 5 秒 debounce；期间如果同一会话出现更新的 message ID，等待时间会重置。连续的好友消息会作为一个批次展示，并随最近 20 条上下文一起交给 LLM，只处理批次中最新消息的幂等键。
+
 最安全的单好友配置示例：
 
 ```env
@@ -76,7 +103,8 @@ OPENAI_MODEL=your-model-name
 - `LLM_TIMEOUT_MS`：模型调用超时，默认 30000。
 - `MAX_REPLIES_PER_MINUTE`：一分钟内最多发送数，默认 5。
 - `MAX_REPLIES_PER_CONTACT_PER_HOUR`：单个联系人一小时内最多发送数，默认 10。
-- `POLL_INTERVAL_MS`、`MESSAGE_DEBOUNCE_MS`：为后续连续轮询阶段预留，Phase 5 单次扫描暂不使用。
+- `POLL_INTERVAL_MS`：持续轮询间隔，默认 10000ms。
+- `MESSAGE_DEBOUNCE_MS`：同一会话连续消息等待时间，默认 5000ms。
 
 查看最近 20 条已处理记录：
 

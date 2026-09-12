@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { findLatestIncomingMessage } from "../src/processing/detectIncoming.js";
+import {
+  findLatestIncomingMessage,
+  findTrailingIncomingMessages,
+} from "../src/processing/detectIncoming.js";
 import type { DouyinMessage } from "../src/types/douyin.js";
 
 function message(
@@ -36,4 +39,19 @@ test("does not return an older friend message after I already replied", () => {
   ];
 
   assert.equal(findLatestIncomingMessage(messages), undefined);
+});
+
+test("collects consecutive friend messages as one incoming batch", () => {
+  const messages = [
+    message("1", "friend", "旧消息"),
+    message("2", "me", "旧回复"),
+    message("3", "friend", "在吗"),
+    message("4", "friend", "晚上有空吗"),
+    message("5", "friend", "一起吃饭？"),
+  ];
+
+  assert.deepEqual(
+    findTrailingIncomingMessages(messages).map((item) => item.id),
+    ["3", "4", "5"],
+  );
 });
