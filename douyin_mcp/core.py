@@ -793,29 +793,54 @@ class DouyinController:
             ).first
             await editor.wait_for(state="visible", timeout=5000)
             await editor.fill(text)
-            return (await editor.inner_text()).strip() == text.strip()
+            actual = self._normalize_editor_text(await editor.inner_text())
+            return actual == self._normalize_editor_text(text)
 
         except Exception as exc:
             logger.warning("输入文本失败: %s", exc)
             return False
 
+    @staticmethod
+    def _normalize_editor_text(text: str) -> str:
+        """移除 EditorKit 自动插入的不可见占位字符。"""
+        return text.translate(
+            {
+                ord("\u200b"): None,  # zero-width space
+                ord("\u2060"): None,  # word joiner
+                ord("\ufeff"): None,  # zero-width no-break space
+            }
+        ).strip()
+
+    async def _wait_for_editor_clear(self, editor, timeout: float = 3.0) -> bool:
+        """发送后等待编辑器正文清空，以此确认网页已接受发送动作。"""
+        attempts = max(1, int(timeout / 0.2))
+        for _ in range(attempts):
+            if not self._normalize_editor_text(await editor.inner_text()):
+                return True
+            await asyncio.sleep(0.2)
+        return False
+
     async def _click_send(self) -> bool:
         """点击发送按钮。"""
+        editor = self.page.locator(
+            ".messageEditorinputArea[contenteditable='true']"
+        ).first
         try:
             # 当前网页版在输入框右侧放置两个 SVG 操作：表情、发送。
             # 发送始终是 message input 容器中的最后一个可见 SVG。
             actions = self.page.locator(".messageMsgInputcontainer svg:visible")
             if await actions.count() >= 2:
                 await actions.last.click()
-                return True
+                if await self._wait_for_editor_clear(editor):
+                    return True
         except Exception as exc:
             logger.warning("点击发送按钮失败: %s", exc)
 
         # 降级：按 Enter 发送
         try:
-            await self.page.keyboard.press("Enter")
-            return True
-        except Exception:
-            pass
+            await editor.press("Enter")
+            return await self._wait_for_editor_clear(editor)
+        except Exception as exc:
+            logger.warning("按 Enter 发送失败: %s", exc)
 
         return False

@@ -77,6 +77,12 @@ class StructuredModelsTest(unittest.TestCase):
             [2, 1, 0],
         )
 
+    def test_editor_text_ignores_invisible_placeholders(self) -> None:
+        self.assertEqual(
+            DouyinController._normalize_editor_text("你好\u200b\u2060\ufeff"),
+            "你好",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
