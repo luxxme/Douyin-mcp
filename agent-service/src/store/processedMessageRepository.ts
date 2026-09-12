@@ -6,7 +6,7 @@ export type MarkProcessedInput = {
   conversationId: string;
   messageKey: string;
   message: DouyinMessage;
-  disposition: "phase3_observed";
+  disposition: "phase3_observed" | "phase4_dry_run" | "phase4_skipped";
   processedAt?: string;
   replyContent?: string | null;
 };
