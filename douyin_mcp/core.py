@@ -591,7 +591,7 @@ class DouyinController:
         for index in self._recent_message_dom_indices(item_count, limit):
             try:
                 message = await self._extract_message(items.nth(index))
-                if message.content:
+                if message.content or message.media_url:
                     messages.append(message)
             except Exception as exc:
                 logger.warning("解析第 %d 条消息失败: %s", index, exc)
@@ -654,17 +654,29 @@ class DouyinController:
             const system = el.classList.contains('messageMessageBoxisFullRowCenterMessage');
             const classText = [...el.querySelectorAll('[class]')]
                 .map(node => typeof node.className === 'string' ? node.className : '').join(' ');
+            const mediaElement = contentBox
+                ? contentBox.querySelector(
+                    '[class*="MessageItemImage"] img, '
+                    + '[class*="MessageItemSticker"] img, '
+                    + '[class*="Emoticon"] img, picture img, img'
+                )
+                : null;
+            const mediaUrl = mediaElement
+                ? (mediaElement.currentSrc || mediaElement.src || mediaElement.getAttribute('src'))
+                : null;
 
             let type = 'other';
             if (system) type = 'other';
+            else if (/MessageItemImage|MessageItemSticker|Emoticon/i.test(classText)) type = 'image';
+            else if (mediaUrl && typeof parsed.text !== 'string') type = 'image';
             else if (typeof parsed.text === 'string') type = 'text';
-            else if (/MessageItemImage/i.test(classText)) type = 'image';
             else if (/MessageItemShareAweme|MessageItemVideo/i.test(classText) || parsed.itemId) type = 'video';
 
             let content = '';
             if (typeof parsed.text === 'string') content = parsed.text;
             else if (system && fullRow) content = fullRow.innerText;
             else if (active) content = active.innerText;
+            if (!content.trim() && type === 'image') content = '[图片或表情包]';
 
             return {
                 id: messageId,
@@ -674,7 +686,8 @@ class DouyinController:
                 senderName: senderName ? senderName.innerText.trim() : null,
                 content: content.trim(),
                 timestamp: time ? time.innerText.trim() : null,
-                type
+                type,
+                mediaUrl
             };
         }""")
 
@@ -687,6 +700,7 @@ class DouyinController:
                 sender,
                 data["content"],
                 data["timestamp"] or "",
+                data["mediaUrl"] or "",
             ])
             data["id"] = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()
 
@@ -697,6 +711,7 @@ class DouyinController:
             content=data["content"],
             timestamp=data["timestamp"] or None,
             type=data["type"],
+            media_url=data["mediaUrl"] or None,
         )
 
     # ══════════════════════════════════════════════════════════════════

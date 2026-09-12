@@ -36,6 +36,10 @@ class DouyinMessage(BaseModel):
     content: str
     timestamp: str | None = None
     type: Literal["text", "image", "video", "other"]
+    media_url: str | None = Field(
+        default=None,
+        description="Image URL or data URL when the message contains visual media",
+    )
 
 
 class ReadMessagesResult(BaseModel):

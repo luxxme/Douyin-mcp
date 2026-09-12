@@ -2,6 +2,8 @@
 
 当前已实现需求文档中的 Phase 2 至 Phase 6：通过 Streamable HTTP 连接 Python Douyin MCP，持续轮询会话，用 SQLite 对最新 incoming 消息做幂等记录，通过 LangGraph 编排判断、生成和投递，并在显式开启后调用现有 `send_message`。
 
+白名单好友发来的图片和表情包也可进入多模态回复链路。Python MCP 只从消息内容气泡提取图片 URL，Agent Service 只把最近连续 incoming 中最多 3 张有效 `http(s)` 或 Base64 Data URL 交给模型；头像、历史已回复图片、视频和本地路径不会发送给模型。
+
 Phase 4 **永远不会调用 `send_message`**。Phase 5 默认也是 Dry Run，只有严格设置 `AUTO_REPLY_ENABLED=true` 才进入发送分支。
 
 ## 启动
@@ -77,6 +79,8 @@ deliverReply → END
 轮询默认每 10 秒运行。发现新 incoming 后先进入 5 秒 debounce；期间如果同一会话出现更新的 message ID，等待时间会重置。连续的好友消息会作为一个批次展示，并随最近 20 条上下文一起交给 LLM，只处理批次中最新消息的幂等键。
 
 为避免可见浏览器在多个白名单好友之间反复跳转，启动时会对允许的会话做一次基线读取；之后只读取未读、会话摘要变化、正在防抖或控制器最近打开的会话。Python MCP 会保留已经打开的聊天层，并在聊天标题与目标昵称一致时跳过重复点击。
+
+百炼视觉输入需要模型本身支持多模态。`qwen3.7-max` 别名在部分端点可能仍拒绝图片内容；本项目已真实验证 `qwen3.7-max-2026-06-08` 可通过 OpenAI 兼容 Chat API 理解抖音表情包。使用该模型时建议把 `OPENAI_MODEL` 固定为此快照。
 
 最安全的单好友配置示例：
 

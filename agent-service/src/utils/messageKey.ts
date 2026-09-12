@@ -4,7 +4,7 @@ import type { DouyinMessage } from "../types/douyin.js";
 
 type MessageKeyInput = Pick<
   DouyinMessage,
-  "sender" | "content" | "timestamp" | "type"
+  "sender" | "content" | "timestamp" | "type" | "media_url"
 > & {
   id?: string | null;
 };
@@ -24,6 +24,7 @@ export function createMessageKey(
     message.content,
     message.timestamp ?? "",
     message.type,
+    message.media_url ?? "",
   ].join("\u001f");
 
   return `sha256:${createHash("sha256").update(fingerprint).digest("hex")}`;

@@ -95,7 +95,10 @@ export function createAutoReplyGraph(dependencies: AutoReplyGraphDependencies) {
 
   const shouldReply: GraphNode<typeof AutoReplyStateSchema> = (state) => {
     const incoming = state.latestIncomingMessage;
-    if (!incoming || incoming.type !== "text" || !incoming.content.trim()) {
+    const eligibleText = incoming?.type === "text" && incoming.content.trim();
+    const eligibleImage =
+      incoming?.type === "image" && Boolean(incoming.media_url?.trim());
+    if (!incoming || (!eligibleText && !eligibleImage)) {
       return {
         shouldReply: false,
         reason: "unsupported_or_empty_message",

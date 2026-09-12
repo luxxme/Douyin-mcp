@@ -50,10 +50,34 @@ test("parses normalized message directions", () => {
         content: "在吗",
         timestamp: "12:31",
         type: "text",
+        media_url: null,
       },
     ],
     count: 1,
   });
 
   assert.equal(parsed.messages[0]?.sender, "friend");
+});
+
+test("parses image media URLs", () => {
+  const parsed = ReadMessagesResultSchema.parse({
+    conversation_id: "conversation-1",
+    user_id: "sec-user-1",
+    nickname: "好友",
+    messages: [
+      {
+        id: "image-1",
+        sender: "friend",
+        sender_name: "好友",
+        content: "[图片或表情包]",
+        timestamp: null,
+        type: "image",
+        media_url: "https://p3.douyinpic.com/sticker.webp",
+      },
+    ],
+    count: 1,
+  });
+
+  assert.equal(parsed.messages[0]?.type, "image");
+  assert.match(parsed.messages[0]?.media_url ?? "", /^https:/);
 });

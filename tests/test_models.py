@@ -45,6 +45,20 @@ class StructuredModelsTest(unittest.TestCase):
         self.assertEqual(result.messages[0].sender, "friend")
         self.assertEqual(result.messages[0].type, "text")
 
+    def test_image_message_carries_visual_model_url(self) -> None:
+        message = DouyinMessage(
+            id="image-1",
+            sender="friend",
+            sender_name="好友",
+            content="[图片或表情包]",
+            timestamp=None,
+            type="image",
+            media_url="https://p3.douyinpic.com/sticker.webp",
+        )
+
+        self.assertEqual(message.type, "image")
+        self.assertTrue(message.media_url.startswith("https://"))
+
     def test_current_douyin_bubble_direction_is_normalized(self) -> None:
         self.assertEqual(
             DouyinController._normalize_message_sender(

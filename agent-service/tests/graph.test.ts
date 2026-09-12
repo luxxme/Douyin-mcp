@@ -164,7 +164,7 @@ test("shouldReply conditional edge skips unsupported message types", async () =>
   let generations = 0;
   try {
     const repository = new ProcessedMessageRepository(database);
-    const message = incoming("image-message", "[图片]", "image");
+    const message = incoming("video-message", "[视频]", "video");
     const graph = createAutoReplyGraph({
       client: {
         async readMessages() {
@@ -199,6 +199,55 @@ test("shouldReply conditional edge skips unsupported message types", async () =>
     assert.equal(result.outcome, "skipped");
     assert.equal(generations, 0);
     assert.equal(repository.listRecent(1)[0]?.disposition, "phase6_skipped");
+  } finally {
+    restoreLogs();
+    database.close();
+  }
+});
+
+test("shouldReply accepts an image with a media URL", async () => {
+  const database = openAgentDatabase(":memory:");
+  const restoreLogs = muteLogs();
+  let generations = 0;
+  try {
+    const repository = new ProcessedMessageRepository(database);
+    const message = {
+      ...incoming("image-message", "[图片或表情包]", "image"),
+      media_url: "https://p3.douyinpic.com/sticker.webp",
+    };
+    const graph = createAutoReplyGraph({
+      client: {
+        async readMessages() {
+          return {
+            conversation_id: conversation.conversation_id,
+            user_id: conversation.user_id,
+            nickname: conversation.nickname,
+            messages: [message],
+            count: 1,
+          };
+        },
+        async sendMessage() {
+          throw new Error("Dry Run must not send");
+        },
+      },
+      repository,
+      generator: {
+        async generate() {
+          generations += 1;
+          return { shouldReply: true, replyText: "这个表情也太真实了 😂", reason: "generated" };
+        },
+      },
+      rateLimiter: new ReplyRateLimiter(repository, 5, 10),
+      messageLimit: 20,
+      sendEnabled: false,
+    });
+
+    const result = await graph.invoke({
+      conversation,
+      expectedMessageKey: message.id,
+    });
+    assert.equal(result.outcome, "dry_run");
+    assert.equal(generations, 1);
   } finally {
     restoreLogs();
     database.close();

@@ -22,6 +22,7 @@ export const DouyinMessageSchema = z.object({
   content: z.string(),
   timestamp: z.string().nullable(),
   type: z.enum(["text", "image", "video", "other"]),
+  media_url: z.string().min(1).nullable().optional(),
 });
 
 export const ReadMessagesResultSchema = z.object({
