@@ -1,12 +1,59 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
   buildReplyUserContent,
+  buildPersonaSystemPrompt,
   collectTrailingIncomingImageUrls,
   extractTextContent,
   formatConversationContext,
+  OpenAIReplyGenerator,
 } from "../src/llm/replyGenerator.js";
+
+test("builds a contact-specific system prompt", () => {
+  const prompt = buildPersonaSystemPrompt({
+    contactName: "🌈陈皮皮",
+    globalProfile: "我一般不用句号",
+    contactProfile: "称呼：皮皮\n常用回复：笑死",
+    contactProfilePath: "ignored.md",
+  });
+  assert.match(prompt, /当前聊天好友：🌈陈皮皮/);
+  assert.match(prompt, /我一般不用句号/);
+  assert.match(prompt, /称呼：皮皮/);
+});
+
+test("declines before calling the model when a required profile is missing", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "douyin-persona-required-"));
+  const generator = new OpenAIReplyGenerator({
+    apiKey: "",
+    model: "",
+    timeoutMs: 1_000,
+    personaDirectory: directory,
+    requireContactProfile: true,
+  });
+
+  try {
+    const result = await generator.generate(
+      [
+        {
+          id: "friend-1",
+          sender: "friend",
+          sender_name: "无档案好友",
+          content: "在吗",
+          timestamp: null,
+          type: "text",
+        },
+      ],
+      "无档案好友",
+    );
+    assert.deepEqual(result, { shouldReply: false, reason: "profile_missing" });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("formats context with sender roles and excludes system messages", () => {
   const context = formatConversationContext([

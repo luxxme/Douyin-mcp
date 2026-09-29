@@ -6,6 +6,11 @@ __pycache__/
 *.egg-info/
 work/
 
+# Private auto-reply personas (keep examples in Git, real profiles local only)
+agent-service/personas/global.md
+agent-service/personas/contacts/*.md
+!agent-service/personas/contacts/example.md
+
 # Runtime state and sensitive login material
 data/*
 !data/.gitkeep

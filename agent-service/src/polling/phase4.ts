@@ -82,7 +82,10 @@ export async function runPhase4Scan(
         continue;
       }
 
-      const generation = await generator.generate(result.messages);
+      const generation = await generator.generate(
+        result.messages,
+        conversation.nickname,
+      );
       if (!generation.shouldReply) {
         repository.markProcessed({
           conversationId: conversation.conversation_id,

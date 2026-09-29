@@ -23,6 +23,8 @@ async function main(): Promise<void> {
     apiKey: config.openAIApiKey,
     model: config.openAIModel,
     timeoutMs: config.llmTimeoutMs,
+    personaDirectory: config.personaDirectory,
+    requireContactProfile: config.requireContactProfile,
     ...(config.openAIBaseUrl ? { baseUrl: config.openAIBaseUrl } : {}),
   });
   const rateLimiter = new ReplyRateLimiter(
@@ -52,6 +54,8 @@ async function main(): Promise<void> {
   console.log(`Mode: ${config.autoReplyEnabled ? "LIVE SEND" : "DRY RUN"}`);
   console.log(`Poll interval: ${config.pollIntervalMs}ms`);
   console.log(`Message debounce: ${config.messageDebounceMs}ms`);
+  console.log(`Persona directory: ${config.personaDirectory}`);
+  console.log(`Contact profile required: ${config.requireContactProfile}`);
   console.log(
     `Allow list: ${config.allowlist.length ? config.allowlist.join(", ") : "(empty)"}`,
   );

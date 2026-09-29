@@ -32,6 +32,7 @@ services:
       - DOUYIN_HEADLESS=true
       # MCP 官方当前推荐的 Streamable HTTP 传输
       - DOUYIN_TRANSPORT=streamable-http
+      - DOUYIN_HOST=0.0.0.0
       - DOUYIN_PORT=6789
     restart: unless-stopped
     # 资源限制

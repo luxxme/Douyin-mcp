@@ -232,6 +232,11 @@ def main():
         help="传输协议 (默认: stdio, Docker 推荐: streamable-http)",
     )
     parser.add_argument(
+        "--host",
+        default=os.environ.get("DOUYIN_HOST", "127.0.0.1"),
+        help="HTTP 模式监听地址 (默认: 127.0.0.1；Docker 中设为 0.0.0.0)",
+    )
+    parser.add_argument(
         "--port",
         type=int,
         default=int(os.environ.get("DOUYIN_PORT", "6789")),
@@ -243,7 +248,7 @@ def main():
     logger.info("暴露的工具: search_user, list_conversations, read_messages, send_message")
     logger.info("传输模式: %s", args.transport)
     if args.transport != "stdio":
-        logger.info("监听端口: %d", args.port)
+        logger.info("监听地址: %s:%d", args.host, args.port)
         if args.transport == "streamable-http":
             logger.info("MCP 端点: http://localhost:%d/mcp", args.port)
         else:
@@ -256,13 +261,13 @@ def main():
     elif args.transport == "streamable-http":
         mcp.run(
             transport="streamable-http",
-            host="0.0.0.0",
+            host=args.host,
             port=args.port,
         )
     else:
         mcp.run(
             transport="sse",
-            host="0.0.0.0",
+            host=args.host,
             port=args.port,
             sse_path="/sse",
             message_path="/mcp",

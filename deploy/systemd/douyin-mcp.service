@@ -1,0 +1,30 @@
+[Unit]
+Description=Douyin MCP browser automation server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=douyin-mcp
+Group=douyin-mcp
+WorkingDirectory=/opt/douyin-mcp
+Environment=HOME=/var/lib/douyin-mcp
+Environment=TZ=Asia/Shanghai
+Environment=DOUYIN_HEADLESS=true
+Environment=DOUYIN_TRANSPORT=streamable-http
+Environment=DOUYIN_HOST=127.0.0.1
+Environment=DOUYIN_PORT=6789
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/douyin-mcp/.playwright
+ExecStart=/opt/douyin-mcp/.venv/bin/python -m douyin_mcp.server --transport streamable-http --host 127.0.0.1 --port 6789
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/douyin-mcp
+
+[Install]
+WantedBy=multi-user.target

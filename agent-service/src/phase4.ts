@@ -20,6 +20,8 @@ async function main(): Promise<void> {
     apiKey: config.openAIApiKey,
     model: config.openAIModel,
     timeoutMs: config.llmTimeoutMs,
+    personaDirectory: config.personaDirectory,
+    requireContactProfile: config.requireContactProfile,
     ...(config.openAIBaseUrl ? { baseUrl: config.openAIBaseUrl } : {}),
   });
 

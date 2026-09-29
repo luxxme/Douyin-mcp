@@ -113,7 +113,10 @@ export function createAutoReplyGraph(dependencies: AutoReplyGraphDependencies) {
     state.shouldReply ? "generateReply" : "markSkipped";
 
   const generateReply: GraphNode<typeof AutoReplyStateSchema> = async (state) => {
-    const generation = await dependencies.generator.generate(state.messages);
+    const generation = await dependencies.generator.generate(
+      state.messages,
+      state.conversation.nickname,
+    );
     if (!generation.shouldReply) {
       return { shouldReply: false, reason: generation.reason };
     }

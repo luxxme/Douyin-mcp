@@ -37,6 +37,7 @@ RUN pip install --no-cache-dir -e . && \
 # 环境变量
 ENV DOUYIN_HEADLESS=true
 ENV DOUYIN_TRANSPORT=streamable-http
+ENV DOUYIN_HOST=0.0.0.0
 ENV DOUYIN_PORT=6789
 ENV TZ=Asia/Shanghai
 

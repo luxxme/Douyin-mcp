@@ -16,6 +16,8 @@ const EnvironmentSchema = z.object({
   OPENAI_API_KEY: z.string().default(""),
   OPENAI_MODEL: z.string().default(""),
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  PERSONA_DIR: z.string().min(1).default("./personas"),
+  PERSONA_REQUIRE_CONTACT_PROFILE: z.string().default("true"),
   POLL_INTERVAL_MS: z.coerce.number().int().positive().default(10_000),
   MESSAGE_DEBOUNCE_MS: z.coerce.number().int().nonnegative().default(5_000),
   MAX_REPLIES_PER_MINUTE: z.coerce.number().int().positive().default(5),
@@ -52,6 +54,8 @@ export type AppConfig = {
   openAIApiKey: string;
   openAIModel: string;
   llmTimeoutMs: number;
+  personaDirectory: string;
+  requireContactProfile: boolean;
   pollIntervalMs: number;
   messageDebounceMs: number;
   maxRepliesPerMinute: number;
@@ -79,6 +83,11 @@ export function loadConfig(
     openAIApiKey: parsed.OPENAI_API_KEY.trim(),
     openAIModel: parsed.OPENAI_MODEL.trim(),
     llmTimeoutMs: parsed.LLM_TIMEOUT_MS,
+    personaDirectory: parsed.PERSONA_DIR,
+    requireContactProfile: parseBoolean(
+      parsed.PERSONA_REQUIRE_CONTACT_PROFILE,
+      "PERSONA_REQUIRE_CONTACT_PROFILE",
+    ),
     pollIntervalMs: parsed.POLL_INTERVAL_MS,
     messageDebounceMs: parsed.MESSAGE_DEBOUNCE_MS,
     maxRepliesPerMinute: parsed.MAX_REPLIES_PER_MINUTE,

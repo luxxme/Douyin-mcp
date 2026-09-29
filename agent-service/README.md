@@ -82,6 +82,47 @@ deliverReply → END
 
 百炼视觉输入需要模型本身支持多模态。`qwen3.7-max` 别名在部分端点可能仍拒绝图片内容；本项目已真实验证 `qwen3.7-max-2026-06-08` 可通过 OpenAI 兼容 Chat API 理解抖音表情包。使用该模型时建议把 `OPENAI_MODEL` 固定为此快照。
 
+## 好友独立 Markdown 人设
+
+Agent 会在每次生成回复前重新读取 `PERSONA_DIR`，因此运行过程中修改 Markdown 后，下一次回复就会使用新内容，无需重启。默认目录结构：
+
+```text
+personas/
+├── global.md            # 对所有好友生效的个人口吻
+└── contacts/
+    ├── 陈皮皮.md        # 文件名可以自定义
+    └── 其他好友.md
+```
+
+好友档案必须包含一行完整昵称，例如：
+
+```md
+# 好友资料
+
+抖音昵称：🌈陈皮皮
+
+## 身份与关系
+
+- 我对他的称呼：皮皮
+- 关系和熟悉程度：很熟
+
+## 我跟他说话的习惯
+
+- 回复很短，通常不使用句号
+- 常用“哈哈哈”“笑死”
+
+## 真实对话示例
+
+对方：在干嘛
+我：躺着呢咋了
+```
+
+匹配以档案内容中的 `抖音昵称：` 为准，不依赖文件名，所以昵称包含 emoji 或其他符号也可以使用。昵称必须与抖音会话列表显示值一致；同一昵称存在两份档案时会报错，防止套用错误人设。
+
+`PERSONA_REQUIRE_CONTACT_PROFILE=true` 为安全默认值：白名单好友没有匹配档案时会记录 `profile_missing` 并跳过回复，不会退回通用人设实发。设为 `false` 才允许没有专属档案的好友使用通用提示词。
+
+真实的 `global.md` 和 `contacts/*.md` 默认被 Git 忽略，避免把私人关系和聊天习惯推送到公开仓库。仓库中的 `global.example.md` 和 `contacts/example.md` 可以作为模板。
+
 最安全的单好友配置示例：
 
 ```env
@@ -92,6 +133,8 @@ AUTO_REPLY_ALLOW_ALL=false
 OPENAI_BASE_URL=https://your-openai-compatible-endpoint/v1
 OPENAI_API_KEY=your-api-key
 OPENAI_MODEL=your-model-name
+PERSONA_DIR=./personas
+PERSONA_REQUIRE_CONTACT_PROFILE=true
 ```
 
 `AUTO_REPLY_ALLOWLIST` 为空且 `AUTO_REPLY_ALLOW_ALL=false` 时，任何联系人都不会被读取，也不会调用 LLM。黑名单优先于白名单和 `allow_all`。
@@ -107,6 +150,8 @@ OPENAI_MODEL=your-model-name
 - `OPENAI_BASE_URL`：可选的 OpenAI-compatible API 地址；使用 OpenAI 官方地址时可留空。
 - `OPENAI_API_KEY`、`OPENAI_MODEL`：仅在出现符合联系人策略的待处理消息时才校验。
 - `LLM_TIMEOUT_MS`：模型调用超时，默认 30000。
+- `PERSONA_DIR`：全局口吻及好友 Markdown 档案目录，默认 `./personas`。
+- `PERSONA_REQUIRE_CONTACT_PROFILE`：缺少好友专属档案时是否跳过回复，默认 `true`。
 - `MAX_REPLIES_PER_MINUTE`：一分钟内最多发送数，默认 5。
 - `MAX_REPLIES_PER_CONTACT_PER_HOUR`：单个联系人一小时内最多发送数，默认 10。
 - `POLL_INTERVAL_MS`：持续轮询间隔，默认 10000ms。

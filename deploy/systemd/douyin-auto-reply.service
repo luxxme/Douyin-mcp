@@ -1,0 +1,28 @@
+[Unit]
+Description=Douyin AI auto-reply agent
+Wants=network-online.target
+After=network-online.target douyin-mcp.service
+Requires=douyin-mcp.service
+
+[Service]
+Type=simple
+User=douyin-mcp
+Group=douyin-mcp
+WorkingDirectory=/opt/douyin-mcp/agent-service
+EnvironmentFile=/etc/douyin-mcp/agent.env
+EnvironmentFile=/etc/douyin-mcp/agent-runtime.env
+Environment=HOME=/var/lib/douyin-mcp
+Environment=TZ=Asia/Shanghai
+ExecStart=/opt/douyin-mcp/agent-service/node_modules/.bin/tsx src/autoReply.ts
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=45
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/douyin-mcp
+
+[Install]
+WantedBy=multi-user.target

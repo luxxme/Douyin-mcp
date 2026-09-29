@@ -118,7 +118,10 @@ export async function runPhase5Scan(
         continue;
       }
 
-      const generation = await generator.generate(result.messages);
+      const generation = await generator.generate(
+        result.messages,
+        conversation.nickname,
+      );
       if (!generation.shouldReply || generation.replyText.length > 500) {
         repository.markProcessed({
           conversationId: conversation.conversation_id,
